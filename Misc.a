@@ -1,0 +1,126 @@
+; File Misc.a
+;———————————————————————————————————————————————————————————————
+;
+; Miscellaneous Routines v1.0d16
+;
+;       Yves Lempereur
+;
+; MODIFICATION HISTORY:
+;       04/06/94  YL    Project begins
+;
+;———————————————————————————————————————————————————————————————
+                CASE    OBJ
+;———————————————————————————————————————————————————————————————
+                PRINT   PUSH,OFF
+
+                INCLUDE 'SoundInput.a'
+
+                PRINT   POP
+;———————————————————————————————————————————————————————————————
+IntMask         EQU     $0700
+;———————————————————————————————————————————————————————————————
+                SEG     'Main'
+;———————————————————————————————————————————————————————————————
+                MACHINE MC68020
+;———————————————————————————————————————————————————————————————
+; short DisableInt(void);
+;———————————————————————————————————————————————————————————————
+DisableInt      FUNC    EXPORT
+
+                MOVE    SR,D0
+                OR      #IntMask,SR
+                RTS
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; void RestoreInt(short status);
+;———————————————————————————————————————————————————————————————
+RestoreInt      PROC    EXPORT
+
+StackFrame      RECORD  {RetAddr},DECR
+status          DS.W    1
+RetAddr         DS.L    1
+                ENDR
+
+                WITH    StackFrame
+
+                MOVE    (status,SP),SR
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; Routine name  NullCaret
+;———————————————————————————————————————————————————————————————
+NullCaret       PROC    EXPORT
+
+                ADDQ.L  #4,SP
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+BFRecord        RECORD  0
+flags           DS.B    1
+ratio           DS.B    1
+count           DS.W    1
+index           DS.W    1
+outdex          DS.W    1
+buffer          DS.B    8192
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+; Routine name  SIInterrupt
+;
+; On entry      A0: inParamPtr (pointer)
+;               A1: dataBuffer (pointer)
+;               D0: peakAmplitude (word)
+;               D1: sampleSize (word)
+;———————————————————————————————————————————————————————————————
+SIInterrupt     PROC    EXPORT
+
+                WITH    SPB,BFRecord
+
+                MOVEM.L D0-D4/A0-A2,-(SP)
+                MOVE.L  (userLong,A0),A2
+                CLR.L   D4
+                MOVE    D1,D4
+                CLR.L   D1
+                MOVE.B  (ratio,A2),D1
+                DIVU    D1,D4
+                MOVE    (index,A2),D3
+                MOVE    #8192,D2
+                SUB     D3,D2
+                CMP     D4,D2
+                BLO.S   @2
+                LEA     (buffer,A2,D3),A0
+                MOVE    D4,D0
+                BRA.S   @1
+@0              MOVE.B  (A1),(A0)+
+                ADD.L   D1,A1
+@1              DBRA    D0,@0
+                BRA.S   @7
+@2              LEA     (buffer,A2,D3),A0
+                MOVE    D2,D0
+                BRA.S   @4
+@3              MOVE.B  (A1),(A0)+
+                ADD.L   D1,A1
+@4              DBRA    D0,@3
+                LEA     (buffer,A2),A0
+                MOVE    D4,D0
+                SUB     D2,D0
+                BRA.S   @6
+@5              MOVE.B  (A1),(A0)+
+                ADD.L   D1,A1
+@6              DBRA    D0,@5
+@7              ADD     D4,D3
+                AND     #8191,D3
+                MOVE    D3,(index,A2)
+                ADD     D4,(count,A2)
+                CMP     #8192,(count,A2)
+                BLS.S   Exit
+                OR.B    #$80,(flags,A2)
+Exit            MOVEM.L (SP)+,D0-D4/A0-A2
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+                END

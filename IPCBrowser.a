@@ -1,0 +1,2810 @@
+; File IPCBrowser.a
+;———————————————————————————————————————————————————————————————
+;
+; IPC Browser v1.0d14
+;
+;       Yves Lempereur
+;
+; MODIFICATION HISTORY:
+;       01/25/93  YL    Project begins
+;
+;———————————————————————————————————————————————————————————————
+                CASE    OBJ
+;———————————————————————————————————————————————————————————————
+                PRINT   PUSH,OFF
+
+                INCLUDE 'Types.a'
+                INCLUDE 'LowMemEqu.a'
+                INCLUDE 'Devices.a'
+                INCLUDE 'Events.a'
+                INCLUDE 'Resources.a'
+                INCLUDE 'AppleTalk.a'
+                INCLUDE 'Quickdraw.a'
+                INCLUDE 'TextUtils.a'
+                INCLUDE 'Windows.a'
+                INCLUDE 'Controls.a'
+                INCLUDE 'Dialogs.a'
+                INCLUDE 'Lists.a'
+
+                PRINT   POP
+;———————————————————————————————————————————————————————————————
+NIL             EQU     0
+arrowCursor     EQU     0
+;———————————————————————————————————————————————————————————————
+ETX             EQU     $03
+BS              EQU     $08
+HT              EQU     $09
+CR              EQU     $0D
+ESC             EQU     $1B
+RS              EQU     $1E
+US              EQU     $1F
+;———————————————————————————————————————————————————————————————
+KNRec           RECORD  0               ; Keyboard Navigation Record
+
+when            DS.L    1               ; Ticks of last key-down
+string          DS.B    64              ; Keys stored as a PString
+
+                ENDR
+;———————————————————————————————————————————————————————————————
+Globals         RECORD  0               ; Browser Globals
+
+myDialog        DS.L    1               ; My Dialog
+zoneList        DS.L    1               ; Zone list
+nodeList        DS.L    1               ; Server list
+nbpLocation     DS.L    1               ; NBP location (EntityPtr)
+lookupPB        DS.L    1               ; NBP lookup paramBlock
+idleTime        DS.L    1               ; NBP idle timeout
+numDone         DS.W    1               ; Number of tuples processed
+retOffset       DS.W    1               ; Offset to unprocessed tuples
+keyNav          DS      KNRec           ; Keyboard navigation stuff
+selectedList    DS.W    1               ; Selected list
+myZoneName      DS.B    33              ; My zone name
+hasBridge       DS.B    1               ; Network has a bridge
+locNBPType      DS.B    33              ; Requested NBP type
+hasDefault      DS.B    1               ; Default was specified
+autoSelect      DS.B    1               ; Auto select flag
+isIdle          DS.B    1               ; NBP lookup is idle
+outlineState    DS.B    1               ; Outline hilite state
+GlobalSize      EQU     *
+
+                ENDR
+;———————————————————————————————————————————————————————————————
+                SEG     'Dialogs'
+;———————————————————————————————————————————————————————————————
+; PROCEDURE SetCursor (cursorID: INTEGER);
+;———————————————————————————————————————————————————————————————
+SETCURSOR       PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+cursorID        DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE    (cursorID,A6),D0
+                BEQ.S   @0
+                SUBQ.L  #4,SP
+                MOVE    D0,-(SP)
+                _GetCursor
+                MOVE.L  (SP)+,D0
+                BEQ.S   @0
+                MOVE.L  D0,A0
+                MOVE.L  (A0),-(SP)
+                _SetCursor
+                BRA.S   Exit
+@0              MOVE.L  (0,A5),A0
+                PEA     (CurrentQDGlobals.arrow,A0)
+                _SetCursor
+Exit            UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE GetIBox (theDialog: DialogPtr; itemNo: INTEGER; VAR box: Rect);
+;———————————————————————————————————————————————————————————————
+GETIBOX         PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+box             DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+itemType        DS.W    1
+item            DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE.L  (theDialog,A6),-(SP)
+                MOVE    (itemNo,A6),-(SP)
+                PEA     (itemType,A6)
+                PEA     (item,A6)
+                MOVE.L  (box,A6),-(SP)
+                _GetDialogItem
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADD     #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE SetIHook (theDialog: DialogPtr; itemNo: INTEGER; dlgHook: ProcPtr);
+;———————————————————————————————————————————————————————————————
+SETIHOOK        PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+dlgHook         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+itemType        DS.W    1
+item            DS.L    1
+box             DS      Rect
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE.L  (theDialog,A6),-(SP)
+                MOVE    (itemNo,A6),-(SP)
+                PEA     (itemType,A6)
+                PEA     (item,A6)
+                PEA     (box,A6)
+                _GetDialogItem
+                MOVE.L  (theDialog,A6),-(SP)
+                MOVE    (itemNo,A6),-(SP)
+                MOVE    (itemType,A6),-(SP)
+                MOVE.L  (dlgHook,A6),-(SP)
+                PEA     (box,A6)
+                _SetDialogItem
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADD     #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE CenterDialog (dialogID: INTEGER);
+;———————————————————————————————————————————————————————————————
+CENTERDIALOG    PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+dialogID        DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                SUBQ.L  #4,SP
+                MOVE.L  #'DLOG',-(SP)
+                MOVE    (dialogID,A6),-(SP)
+                _GetResource
+                MOVE.L  (SP)+,D0
+                BEQ.S   Exit
+                MOVE.L  D0,A1
+                MOVE.L  (A1),A1
+                MOVE.L  (0,A5),A0
+                MOVE    (MBarHeight),D0
+                ADD     (CurrentQDGlobals.screenBits.bounds.top,A0),D0
+                SUB     (DialogTemplate.boundsRect.top,A1),D0
+                ASL     #1,D0
+                ADD     (CurrentQDGlobals.screenBits.bounds.bottom,A0),D0
+                SUB     (DialogTemplate.boundsRect.bottom,A1),D0
+                EXT.L   D0
+                DIVS    #3,D0
+                MOVE    (CurrentQDGlobals.screenBits.bounds.left,A0),D1
+                ADD     (CurrentQDGlobals.screenBits.bounds.right,A0),D1
+                SUB     (DialogTemplate.boundsRect.left,A1),D1
+                SUB     (DialogTemplate.boundsRect.right,A1),D1
+                ASR     #1,D1
+                ADD     D0,(A1)+
+                ADD     D1,(A1)+
+                ADD     D0,(A1)+
+                ADD     D1,(A1)
+Exit            UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE KNInit (pKN: KNRec);
+;———————————————————————————————————————————————————————————————
+KNINIT          PROC    ENTRY
+
+                WITH    KNRec
+
+                MOVEM.L (SP)+,A0/A1
+                CLR.L   (A1)+           ; when
+                CLR.B   (A1)            ; string
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; FUNCTION KNKey (theEvent: EventRecord; pKN: KNRec) : BOOLEAN;
+;———————————————————————————————————————————————————————————————
+KNKEY           FUNC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+theEvent        DS.L    1
+pKN             DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame,KNRec
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                CLR     (Result,A6)
+                MOVE.L  (pKN,A6),A4
+                MOVE.L  (theEvent,A6),A3
+
+                CMP     #keyDown,(EventRecord.what,A3)
+                BNE.S   Exit
+                BTST    #cmdKeyBit-8,(EventRecord.modifiers,A3)
+                BNE.S   @0
+                MOVE.B  (EventRecord.message+3,A3),D0
+                CMP.B   #BS,D0
+                BEQ.S   @0
+                CMP.B   #ESC,D0
+                BNE.S   @1
+@0              MOVE.L  A4,-(SP)
+                BSR     KNInit
+                BRA.S   Exit
+@1              TST.B   (string,A4)
+                BEQ.S   @3
+                MOVEQ   #0,D0
+                MOVE    (KeyThresh),D0
+                CMP     #60,D0
+                BLS.S   @2
+                MOVEQ   #60,D0
+@2              ADD.L   D0,D0
+                ADD.L   (when,A4),D0
+                CMP.L   (EventRecord.when,A3),D0
+                BPL.S   @3
+                MOVE.L  A4,-(SP)
+                BSR     KNInit
+@3              LEA     (string,A4),A0
+                CMP.B   #63,(A0)
+                BHS.S   Exit
+                ADDQ.B  #1,(A0)
+                MOVEQ   #0,D0
+                MOVE.B  (A0),D0
+                ADD.L   D0,A0
+                MOVE.B  (EventRecord.message+3,A3),(A0)
+                MOVE.L  (EventRecord.when,A3),(when,A4)
+                ST      (Result,A6)
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; FUNCTION KNCompString (theString: Str255; pKN: KNRec) : INTEGER;
+;———————————————————————————————————————————————————————————————
+KNCOMPSTRING    FUNC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+theString       DS.L    1
+pKN             DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame,KNRec
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3/D4/A3/A4,-(SP)
+
+                MOVE.L  (pKN,A6),A4
+                LEA     (string,A4),A4
+                MOVEQ   #0,D4
+                MOVE.B  (A4)+,D4
+
+                MOVE.L  (theString,A6),A3
+                MOVEQ   #0,D3
+                MOVE.B  (A3)+,D3
+
+                CMP     D4,D3
+                BNE.S   @0
+
+                SUBQ.L  #2,SP
+                MOVE.L  A4,-(SP)
+                MOVE.L  A3,-(SP)
+                MOVE    D4,-(SP)
+                MOVE    D3,-(SP)
+                _IUMagIDString
+                MOVE    (SP)+,D0
+                BEQ.S   @1
+
+@0              SUBQ.L  #2,SP
+                MOVE.L  A4,-(SP)
+                MOVE.L  A3,-(SP)
+                MOVE    D4,-(SP)
+                MOVE    D3,-(SP)
+                _IUMagString
+                MOVE    (SP)+,D0
+
+@1              MOVE    D0,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3/D4/A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; FUNCTION Wildcard (nbpZone: Str32) : BOOLEAN;
+;———————————————————————————————————————————————————————————————
+WILDCARD        FUNC    ENTRY
+
+                MOVEM.L (SP)+,A0/A1
+                ST      (SP)
+                MOVEQ   #0,D1
+                MOVE.B  (A1)+,D1
+                BRA.S   @1
+@0              MOVE.B  (A1)+,D0
+                CMP.B   #'=',D0
+                BEQ.S   Exit
+                CMP.B   #'≈',D0
+                BEQ.S   Exit
+@1              DBRA    D1,@0
+                SF      (SP)
+Exit            JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; PROCEDURE HiliteOK (theDialog: DialogPtr; hiliteState: INTEGER);
+;———————————————————————————————————————————————————————————————
+HILITEOK        PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+hiliteState     DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+itemType        DS.W    1
+item            DS.L    1
+box             DS      Rect
+pnState         DS      PenState
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D7/A3/A4,-(SP)
+
+                MOVE.L  (theDialog,A6),A3
+                MOVE    (hiliteState,A6),D7
+
+                SUBQ.L  #4,SP
+                MOVE.L  A3,-(SP)
+                _GetWRefCon
+                MOVE.L  (SP)+,A4
+
+                CMP.B   (outlineState,A4),D7
+                BEQ.S   Exit
+                MOVE.B  D7,(outlineState,A4)
+
+                MOVE.L  A3,-(SP)
+                MOVE    #ok,-(SP)
+                PEA     (itemType,A6)
+                PEA     (item,A6)
+                PEA     (box,A6)
+                _GetDialogItem
+
+                MOVE.L  (item,A6),-(SP)
+                MOVE    D7,-(SP)
+                _HiliteControl
+
+                PEA     (pnState,A6)
+                _GetPenState
+                _PenNormal
+
+                MOVEQ   #3,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _PenSize
+
+                PEA     (box,A6)
+                MOVEQ   #-4,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _InsetRect
+
+                CMP.B   #255,D7
+                BNE.S   @0
+
+                MOVE.L  (0,A5),A0
+                PEA     (CurrentQDGlobals.gray,A0)
+                _PenPat
+
+@0              PEA     (box,A6)
+                MOVEQ   #16,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _FrameRoundRect
+
+                PEA     (pnState,A6)
+                _SetPenState
+
+Exit            MOVEM.L (SP)+,D7/A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; FUNCTION NewList (theDialog: DialogPtr; itemNo: INTEGER; colCount: INTEGER) : ListHandle;
+;———————————————————————————————————————————————————————————————
+NEWLIST         FUNC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.L    1
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+colCount        DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+cSize           DS      Point
+rView           DS      Rect
+dataBounds      DS      Rect
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                MOVE.L  (theDialog,A6),A3
+
+                MOVE.L  A3,-(SP)
+                MOVE    (itemNo,A6),-(SP)
+                PEA     (rView,A6)
+                BSR     GetIBox
+
+                PEA     (rView,A6)
+                MOVE.L  #$00010001,-(SP)
+                _InsetRect
+                SUB     #15,(rView.right,A6)
+
+                PEA     (dataBounds,A6)
+                MOVE.L  #$00000000,-(SP)
+                MOVE    (colCount,A6),-(SP)
+                MOVE    #0,-(SP)
+                _SetRect
+
+                MOVE    #0,(cSize.v,A6)
+                MOVE    (rView.right,A6),D0
+                SUB     (rView.left,A6),D0
+                MOVE    D0,(cSize.h,A6)
+
+                SUBQ.L  #4,SP
+                PEA     (rView,A6)
+                PEA     (dataBounds,A6)
+                MOVE.L  (cSize,A6),-(SP)
+                MOVE    #0,-(SP)
+                MOVE.L  A3,-(SP)
+                ST      -(SP)
+                SF      -(SP)
+                SF      -(SP)
+                ST      -(SP)
+                _LNew
+                MOVE.L  (SP)+,A4
+                MOVE.L  A4,D0
+                BEQ.S   @0
+
+                MOVE.L  (A4),A0
+                MOVE.B  #lOnlyOne+lNoNilHilite,(ListRec.selFlags,A0)
+
+@0              MOVE.L  A4,(Result,A6)
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; PROCEDURE HiliteList (theDialog: DialogPtr; itemNo: INTEGER; hiliteState: BOOLEAN);
+;———————————————————————————————————————————————————————————————
+HILITELIST      PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+hiliteState     DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+box             DS      Rect
+pnState         DS      PenState
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+
+                MOVE.L  (theDialog,A6),-(SP)
+                MOVE    (itemNo,A6),-(SP)
+                PEA     (box,A6)
+                BSR     GetIBox
+
+                PEA     (pnState,A6)
+                _GetPenState
+                _PenNormal
+
+                MOVEQ   #2,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _PenSize
+
+                PEA     (box,A6)
+                MOVEQ   #-3,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _InsetRect
+
+                TST.B   (hiliteState,A6)
+                BNE.S   @0
+
+                MOVE    #notPatCopy,-(SP)
+                _PenMode
+
+@0              PEA     (box,A6)
+                _FrameRect
+
+                PEA     (pnState,A6)
+                _SetPenState
+
+Exit            UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE SelectList (theDialog: DialogPtr; itemNo: INTEGER);
+;———————————————————————————————————————————————————————————————
+SELECTLIST      PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D7/A3/A4,-(SP)
+
+                MOVE.L  (theDialog,A6),A3
+
+                SUBQ.L  #4,SP
+                MOVE.L  A3,-(SP)
+                _GetWRefCon
+                MOVE.L  (SP)+,A4
+
+                MOVE    (selectedList,A4),D7
+
+                MOVE.L  A3,-(SP)
+                MOVE    D7,-(SP)
+                SF      -(SP)
+                BSR     HiliteList
+
+                MOVE    (itemNo,A6),D7
+
+                MOVE.L  A3,-(SP)
+                MOVE    D7,-(SP)
+                ST      -(SP)
+                BSR     HiliteList
+
+                MOVE    D7,(selectedList,A4)
+
+                MOVEM.L (SP)+,D7/A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; FUNCTION InsertCell (theString: Str32; VAR rowNum: INTEGER; lHandle: ListHandle) : BOOLEAN;
+;———————————————————————————————————————————————————————————————
+INSERTCELL      FUNC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+theString       DS.L    1
+rowNum          DS.L    1
+lHandle         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+data            DS.B    32
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+                MOVE.L  (theString,A6),A3
+                LEA     (data,A6),A2
+
+                CLR     D3
+                MOVE.B  (A3)+,D3
+
+                MOVE.L  (A4),A0
+                MOVE    (ListRec.dataBounds+Rect.top,A0),D7
+                MOVE    (ListRec.dataBounds+Rect.bottom,A0),D6
+
+@0              CMP     D6,D7
+                BEQ.S   @3
+
+                MOVE    D7,D5
+                ADD     D6,D5
+                ASR     #1,D5
+
+                MOVE    #32,-(SP)
+                MOVE.L  A2,-(SP)
+                PEA     (4,SP)
+                MOVE    #0,-(SP)
+                MOVE    D5,-(SP)
+                MOVE.L  A4,-(SP)
+                _LGetCell
+                MOVE    (SP)+,D2
+
+                SUBQ.L  #2,SP
+                MOVE.L  A2,-(SP)
+                MOVE.L  A3,-(SP)
+                MOVE    D2,-(SP)
+                MOVE    D3,-(SP)
+                _IUMagString
+                TST     (SP)+
+                BEQ.S   @2
+                BMI.S   @1
+                MOVE    D5,D6
+                BRA.S   @0
+@1              ADDQ    #1,D5
+                MOVE    D5,D7
+                BRA.S   @0
+@2              MOVE    D5,D7
+                SF      D0
+                BRA.S   @4
+
+@3              SUBQ.L  #2,SP
+                MOVE    #1,-(SP)
+                MOVE    D7,-(SP)
+                MOVE.L  A4,-(SP)
+                _LAddRow
+                MOVE    (SP)+,D7
+                MOVE.L  A3,-(SP)
+                MOVE    D3,-(SP)
+                MOVE    #0,-(SP)
+                MOVE    D7,-(SP)
+                MOVE.L  A4,-(SP)
+                _LSetCell
+                ST      D0
+
+@4              MOVE.L  (rowNum,A6),A0
+                MOVE    D7,(A0)
+                MOVE.B  D0,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADD     #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; FUNCTION GetSelect (VAR theCell: Cell; lHandle: ListHandle) : BOOLEAN;
+;———————————————————————————————————————————————————————————————
+GETSELECT       FUNC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+theCell         DS.L    1
+lHandle         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+                MOVE.L  (theCell,A6),A3
+
+                MOVE.L  (A4),A0
+                MOVE.L  (ListRec.dataBounds+Rect.topLeft,A0),(A3)
+
+                SUBQ.L  #2,SP
+                ST      -(SP)
+                MOVE.L  A3,-(SP)
+                MOVE.L  A4,-(SP)
+                _LGetSelect
+                MOVE.B  (SP)+,(Result,A6)
+                BNE.S   Exit
+
+                MOVE.L  #$80008000,(A3)
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; PROCEDURE SetSelect (theCell: Cell; lHandle: ListHandle);
+;———————————————————————————————————————————————————————————————
+SETSELECT       PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theCell         DS      Point
+lHandle         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+r               DS      Rect
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE.L  A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+                MOVE.L  (A4),A0
+                MOVE.L  (ListRec.visible+Rect.topLeft,A0),(r.topLeft,A6)
+                MOVE.L  (ListRec.visible+Rect.botRight,A0),(r.botRight,A6)
+
+                SUBQ.L  #2,SP
+                MOVE.L  (theCell,A6),-(SP)
+                PEA     (r,A6)
+                _PtInRect
+                TST.B   (SP)+
+                BNE.S   @0
+
+                MOVE    #0,-(SP)
+                MOVE    (theCell.v,A6),D0
+                SUB     (r.top,A6),D0
+                MOVE    D0,-(SP)
+                MOVE.L  A4,-(SP)
+                _LScroll
+
+@0              ST      -(SP)
+                MOVE.L  (theCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                _LSetSelect
+
+Exit            MOVE.L  (SP)+,A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE SetSelectSeq (theCell: Cell; lHandle: ListHandle);
+;———————————————————————————————————————————————————————————————
+SETSELECTSEQ    PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theCell         DS      Point
+lHandle         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE.L  A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+                MOVE.L  (A4),A0
+                MOVE    (ListRec.visible+Rect.top,A0),D2
+                MOVE    (ListRec.visible+Rect.bottom,A0),D1
+                SUBQ    #1,D1
+
+                MOVE    (theCell.v,A6),D0
+                CMP     D2,D0
+                BGE.S   @0
+                SUB     D2,D0
+                BRA.S   @1
+@0              CMP     D1,D0
+                BLE.S   @2
+                SUB     D1,D0
+
+@1              MOVE    #0,-(SP)
+                MOVE    D0,-(SP)
+                MOVE.L  A4,-(SP)
+                _LScroll
+
+@2              ST      -(SP)
+                MOVE.L  (theCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                _LSetSelect
+
+Exit            MOVE.L  (SP)+,A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; FUNCTION GetSelCell (VAR theString: Str32; lHandle: ListHandle) : BOOLEAN;
+;———————————————————————————————————————————————————————————————
+GETSELCELL      FUNC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+theString       DS.L    1
+lHandle         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+dataLen         DS.W    1
+theCell         DS      Point
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+                MOVE.L  (theString,A6),A3
+                CLR.B   (A3)
+
+                SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  A4,-(SP)
+                BSR     GetSelect
+                MOVE.B  (SP)+,(Result,A6)
+                BEQ.S   Exit
+
+                MOVE    #32,(dataLen,A6)
+                PEA     (1,A3)
+                PEA     (dataLen,A6)
+                MOVE.L  (theCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                _LGetCell
+                MOVE.B  (dataLen+1,A6),(A3)
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; FUNCTION SelectCell (theString: Str32; lHandle: ListHandle) : BOOLEAN;
+;———————————————————————————————————————————————————————————————
+SELECTCELL      FUNC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+theString       DS.L    1
+lHandle         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+oldCell         DS      Point
+newCell         DS      Point
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE.L  A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+                MOVE.L  (A4),A0
+                MOVE.L  (ListRec.dataBounds+Rect.topLeft,A0),(newCell,A6)
+
+                MOVE.L  (theString,A6),A0
+                CLR     D0
+                MOVE.B  (A0)+,D0
+
+                SUBQ.L  #2,SP
+                MOVE.L  A0,-(SP)
+                MOVE    D0,-(SP)
+                MOVE.L  #NIL,-(SP)
+                PEA     (newCell,A6)
+                MOVE.L  A4,-(SP)
+                _LSearch
+                MOVE.B  (SP)+,(Result,A6)
+                BEQ.S   Exit
+
+                SUBQ.L  #2,SP
+                PEA     (oldCell,A6)
+                MOVE.L  A4,-(SP)
+                BSR     GetSelect
+                TST.B   (SP)+
+                BEQ.S   @0
+
+                SF      -(SP)
+                MOVE.L  (oldCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                _LSetSelect
+
+@0              MOVE.L  (newCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                BSR     SetSelect
+
+Exit            MOVE.L  (SP)+,A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NGetMyZone (VAR nbpZone: Str32);
+;———————————————————————————————————————————————————————————————
+NGETMYZONE      PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+nbpZone         DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+paramBlock      DS      XPPParamBlock
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+
+                LEA     (paramBlock,A6),A0
+                MOVE    #xppRefNum,(XPPParamBlock.ioRefNum,A0)
+                MOVE    #xCall,(XPPParamBlock.csCode,A0)
+                MOVE    #zipGetMyZone,(XPPParamBlock.xppSubCode,A0)
+                MOVE.B  #1,(XPPParamBlock.xppTimeout,A0)
+                MOVE.B  #5,(XPPParamBlock.xppRetry,A0)
+                MOVE.L  (nbpZone,A6),(XPPParamBlock.zipBuffPtr,A0)
+                MOVE    #0,(XPPParamBlock.zipInfoField,A0)
+                _PBControlSync
+                BEQ.S   Exit
+
+                MOVE.L  (nbpZone,A6),A0
+                MOVE.B  #1,(A0)+
+                MOVE.B  #'*',(A0)
+
+Exit            UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NGetZoneList (lHandle: ListHandle);
+;———————————————————————————————————————————————————————————————
+NGETZONELIST    PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+lHandle         DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+rowNum          DS.W    1
+r               DS      Rect
+paramBlock      DS      XPPParamBlock
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D6/D7/A2-A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+
+                SF      -(SP)
+                MOVE.L  A4,-(SP)
+                _LSetDrawingMode
+
+                SF      D7
+
+                LEA     (paramBlock,A6),A3
+                MOVE    #xppRefNum,(XPPParamBlock.ioRefNum,A3)
+                MOVE    #xCall,(XPPParamBlock.csCode,A3)
+                MOVE    #zipGetZoneList,(XPPParamBlock.xppSubCode,A3)
+                MOVE.B  #1,(XPPParamBlock.xppTimeout,A3)
+                MOVE.B  #5,(XPPParamBlock.xppRetry,A3)
+                MOVE.L  #578,D0
+                _NewPtr
+                BNE.S   @4
+                MOVE.L  A0,(XPPParamBlock.zipBuffPtr,A3)
+                SF      (XPPParamBlock.zipLastFlag,A3)
+                MOVE    #0,(XPPParamBlock.zipInfoField,A3)
+
+@0              MOVE.L  A3,A0
+                _PBControlSync
+                BNE.S   @3
+
+                MOVE.L  (XPPParamBlock.zipBuffPtr,A3),A2
+                MOVE    (XPPParamBlock.zipNumZones,A3),D6
+                BRA.S   @2
+@1              SUBQ.L  #2,SP
+                MOVE.L  A2,-(SP)
+                PEA     (rowNum,A6)
+                MOVE.L  A4,-(SP)
+                BSR     InsertCell
+                ADDQ.L  #2,SP
+                ST      D7
+                MOVEQ   #0,D0
+                MOVE.B  (A2)+,D0
+                ADD.L   D0,A2
+@2              DBRA    D6,@1
+
+                TST.B   (XPPParamBlock.zipLastFlag,A3)
+                BEQ.S   @0
+
+@3              MOVE.L  (XPPParamBlock.zipBuffPtr,A3),A0
+                _DisposePtr
+
+@4              TST.B   D7
+                BNE.S   @5
+
+                SUBQ.L  #2,SP
+                PEA     #'*'
+                PEA     (rowNum,A6)
+                MOVE.L  A4,-(SP)
+                BSR     InsertCell
+                ADDQ.L  #2,SP
+
+@5              ST      -(SP)
+                MOVE.L  A4,-(SP)
+                _LSetDrawingMode
+
+                MOVE.L  (A4),A0
+                MOVE.L  (ListRec.rView.topLeft,A0),(r.topLeft,A6)
+                MOVE.L  (ListRec.rView.botRight,A0),(r.botRight,A6)
+
+                PEA     (r,A6)
+                _InvalRect
+
+Exit            MOVEM.L (SP)+,D6/D7/A2-A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NBPStart (theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+NBPSTART        PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+theGlobals      DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+
+                SF      (isIdle,A4)
+                MOVE    #0,(numDone,A4)
+                MOVE    #0,(retOffset,A4)
+
+                MOVE.L  (lookupPB,A4),A3
+                MOVE.B  #8,(MPPParamBlock.interval,A3)
+                MOVE.B  #5,(MPPParamBlock.count,A3)
+
+                MOVE.L  A3,A0
+                _PBControlAsync
+                BEQ.S   Exit
+
+                MOVE.L  (MPPParamBlock.retBuffPtr,A3),A0
+                _DisposePtr
+                MOVE.L  (MPPParamBlock.nbpPtrs,A3),A0
+                _DisposePtr
+                MOVE.L  A3,A0
+                _DisposePtr
+                MOVE.L  #NIL,(lookupPB,A4)
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NBPEnd (thePBptr: MPPPBPtr);
+;———————————————————————————————————————————————————————————————
+NBPEND          PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+thePBptr        DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+paramBlock      DS      MPPParamBlock
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+
+                LEA     (paramBlock,A6),A0
+                MOVE    #mppRefNum,(MPPParamBlock.ioRefNum,A0)
+                MOVE    #killNBP,(MPPParamBlock.csCode,A0)
+                MOVE.L  (thePBptr,A6),(MPPParamBlock.nKillQEl,A0)
+                _PBControlSync
+
+Exit            UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NBPBuffer (theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+NBPBUFFER       PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+theGlobals      DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+                MOVE.L  (lookupPB,A4),A3
+                MOVE    (MPPParamBlock.retBuffSize,A3),D7
+                ADD     #512,D7
+                MOVE.L  (MPPParamBlock.retBuffPtr,A3),A0
+                _DisposePtr
+                MOVEQ   #0,D0
+                MOVE    D7,D0
+                _NewPtr
+                BNE.S   @0
+                MOVE.L  A0,(MPPParamBlock.retBuffPtr,A3)
+                MOVE    D7,(MPPParamBlock.retBuffSize,A3)
+                BRA.S   @1
+@0              MOVEQ   #0,D0
+                MOVE    (MPPParamBlock.retBuffSize,A3),D0
+                _NewPtr
+                MOVE.L  A0,(MPPParamBlock.retBuffPtr,A3)
+@1              MOVE.L  A4,-(SP)
+                BSR     NBPStart
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NBPAging (theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+NBPAGING        PROC    ENTRY
+
+                IMPORT  NODECHANGED
+
+StackFrame      RECORD  {A6Link},DECR
+theGlobals      DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+dataLen         DS.W    1
+numLives        DS.W    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D5-D7/A2-A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+                MOVE.L  (nodeList,A4),A3
+                LEA     (numLives,A6),A2
+                SF      D5
+
+                MOVE.L  (A3),A0
+                MOVE    (ListRec.dataBounds+Rect.top,A0),D7
+                MOVE    (ListRec.dataBounds+Rect.bottom,A0),D6
+                BRA.S   @2
+@0              SUBQ    #1,D6
+                MOVE    #2,(dataLen,A6)
+                MOVE.L  A2,-(SP)
+                PEA     (dataLen,A6)
+                MOVE    #1,-(SP)
+                MOVE    D6,-(SP)
+                MOVE.L  A3,-(SP)
+                _LGetCell
+                SUBQ    #1,(A2)
+                BGT.S   @1
+                MOVE    #1,-(SP)
+                MOVE    D6,-(SP)
+                MOVE.L  A3,-(SP)
+                _LDelRow
+                ST      D5
+                BRA.S   @2
+@1              MOVE.L  A2,-(SP)
+                MOVE    #2,-(SP)
+                MOVE    #1,-(SP)
+                MOVE    D6,-(SP)
+                MOVE.L  A3,-(SP)
+                _LSetCell
+@2              CMP     D7,D6
+                BGT.S   @0
+
+                TST.B   D5
+                BEQ.S   Exit
+                MOVE.L  A4,-(SP)
+                BSR     NodeChanged
+
+Exit            MOVEM.L (SP)+,D5-D7/A2-A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NBPRead (theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+NBPREAD         PROC    ENTRY
+
+                IMPORT  NODECHANGED
+
+tupleName       EQU     5
+
+StackFrame      RECORD  {A6Link},DECR
+theGlobals      DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+numLives        DS.W    1
+rowNum          DS.W    1
+r               DS      Rect
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame,EntityName
+
+                LINK    A6,#LocalSize
+                MOVEM.L D5-D7/A2-A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+
+                TST.B   (isIdle,A4)
+                BEQ.S   @0
+                SUBQ.L  #4,SP
+                _TickCount
+                MOVE.L  (SP)+,D0
+                CMP.L   (idleTime,A4),D0
+                BMI     Exit
+                MOVE.L  A4,-(SP)
+                BSR     NBPStart
+                BRA     Exit
+
+@0              MOVE.L  (lookupPB,A4),A3
+                MOVE    (MPPParamBlock.numGotten,A3),D7
+                CMP     (numDone,A4),D7
+                BEQ     @8
+
+                SF      -(SP)
+                MOVE.L  (nodeList,A4),-(SP)
+                _LSetDrawingMode
+
+                MOVE    #9,(numLives,A6)
+                SF      D5
+
+@1              MOVE.L  (MPPParamBlock.retBuffPtr,A3),A2
+                ADD     (retOffset,A4),A2
+                MOVE    D7,D6
+                SUB     (numDone,A4),D6
+                BRA.S   @4
+@2              SUBQ.L  #2,SP
+                PEA     (tupleName,A2)
+                PEA     (rowNum,A6)
+                MOVE.L  (nodeList,A4),-(SP)
+                BSR     InsertCell
+                TST.B   (SP)+
+                BEQ.S   @3
+                ST      D5
+@3              PEA     (numLives,A6)
+                MOVE    #2,-(SP)
+                MOVE    #1,-(SP)
+                MOVE    (rowNum,A6),-(SP)
+                MOVE.L  (nodeList,A4),-(SP)
+                _LSetCell
+                MOVEQ   #tupleName,D0
+                ADD.L   D0,A2
+                MOVE.B  (A2)+,D0
+                ADD.L   D0,A2
+                MOVE.B  (A2)+,D0
+                ADD.L   D0,A2
+                MOVE.B  (A2)+,D0
+                ADD.L   D0,A2
+@4              DBRA    D6,@2
+                SUB.L   (MPPParamBlock.retBuffPtr,A3),A2
+                MOVE    A2,(retOffset,A4)
+                MOVE    D7,(numDone,A4)
+
+                MOVE    (MPPParamBlock.numGotten,A3),D7
+                CMP     (numDone,A4),D7
+                BNE.S   @1
+
+                TST.B   (autoSelect,A4)
+                BEQ.S   @6
+
+                TST.B   (hasDefault,A4)
+                BEQ.S   @5
+
+                MOVE.L  (nbpLocation,A4),A0
+                LEA     (objStr,A0),A0
+                TST.B   (A0)
+                BEQ.S   @5
+
+                SUBQ.L  #2,SP
+                MOVE.L  A0,-(SP)
+                MOVE.L  (nodeList,A4),-(SP)
+                BSR     SelectCell
+                TST.B   (SP)+
+                BEQ.S   @6
+
+                MOVE.L  A4,-(SP)
+                BSR     NodeChanged
+
+@5              SF      (autoSelect,A4)
+
+@6              ST      -(SP)
+                MOVE.L  (nodeList,A4),-(SP)
+                _LSetDrawingMode
+
+                TST.B   D5
+                BEQ.S   @7
+                MOVE.L  (nodeList,A4),A0
+                MOVE.L  (A0),A0
+                MOVE.L  (ListRec.rView.topLeft,A0),(r.topLeft,A6)
+                MOVE.L  (ListRec.rView.botRight,A0),(r.botRight,A6)
+                PEA     (r,A6)
+                _InvalRect
+
+@7              MOVE    (MPPParamBlock.retBuffSize,A3),D0
+                SUB     (retOffset,A4),D0
+                CMP     #72,D0
+                BHS.S   @8
+                MOVE.L  A3,-(SP)
+                BSR     NBPEnd
+                MOVE.L  A4,-(SP)
+                BSR     NBPBuffer
+                BRA.S   Exit
+
+@8              TST     (MPPParamBlock.ioResult,A3)
+                BGT.S   Exit
+                MOVE    (MPPParamBlock.retBuffSize,A3),D0
+                SUB     (retOffset,A4),D0
+                CMP     #72,D0
+                BHS.S   @9
+                MOVE.L  A4,-(SP)
+                BSR     NBPBuffer
+                BRA.S   Exit
+
+@9              MOVE.L  A4,-(SP)
+                BSR     NBPAging
+                ST      (isIdle,A4)
+                SUBQ.L  #4,SP
+                _TickCount
+                MOVE.L  (SP)+,A0
+                ADD     #120,A0
+                MOVE.L  A0,(idleTime,A4)
+
+Exit            MOVEM.L (SP)+,D5-D7/A2-A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NBPOpen (nbpZone: Str32; theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+NBPOPEN         PROC    ENTRY
+
+                IMPORT  NBPSETENTITY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+nbpZone         DS.L    1
+theGlobals      DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame,EntityName
+
+                LINK    A6,#LocalSize
+                MOVEM.L A2-A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+
+                MOVE.L  #MPPParamBlock.sizeof,D0
+                _NewPtrClear
+                BNE.S   @2
+                MOVE.L  A0,A3
+                MOVE.L  #NIL,(MPPParamBlock.ioCompletion,A3)
+                MOVE    #mppRefNum,(MPPParamBlock.ioRefNum,A3)
+                MOVE    #lookupName,(MPPParamBlock.csCode,A3)
+                MOVE.L  #sizeof,D0                              ; EntitySize
+                _NewPtr
+                BNE.S   @1
+                MOVE.L  A0,A2
+                MOVE.L  A2,-(SP)
+                PEA     #'='
+                PEA     (locNBPType,A4)
+                MOVE.L  (nbpZone,A6),-(SP)
+                JSR     NBPSetEntity
+                MOVE.L  A2,(MPPParamBlock.nbpPtrs,A3)
+                MOVE.L  #512,D0
+                MOVE    D0,(MPPParamBlock.retBuffSize,A3)
+                _NewPtr
+                BNE.S   @0
+                MOVE.L  A0,(MPPParamBlock.retBuffPtr,A3)
+                MOVE    #256,(MPPParamBlock.maxToGet,A3)
+                MOVE.L  A3,(lookupPB,A4)
+
+                MOVE.L  A4,-(SP)
+                BSR     NBPStart
+                BRA.S   Exit
+
+@0              MOVE.L  (MPPParamBlock.nbpPtrs,A3),A0
+                _DisposePtr
+@1              MOVE.L  A3,A0
+                _DisposePtr
+@2              MOVE.L  #NIL,(lookupPB,A4)
+
+Exit            MOVEM.L (SP)+,A2-A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NBPClose (theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+NBPCLOSE        PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+theGlobals      DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+
+                MOVE.L  (lookupPB,A4),D0
+                BEQ.S   Exit
+                MOVE.L  D0,A3
+                TST     (MPPParamBlock.ioResult,A3)
+                BLE.S   @0
+
+                MOVE.L  A3,-(SP)
+                BSR     NBPEnd
+
+@0              MOVE.L  (MPPParamBlock.retBuffPtr,A3),A0
+                _DisposePtr
+                MOVE.L  (MPPParamBlock.nbpPtrs,A3),A0
+                _DisposePtr
+                MOVE.L  A3,A0
+                _DisposePtr
+                MOVE.L  #NIL,(lookupPB,A4)
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE GetLocation (VAR theLocation: EntityName; theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+GETLOCATION     PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theLocation     DS.L    1
+theGlobals      DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame,EntityName
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+                MOVE.L  (theLocation,A6),A3
+
+                SUBQ.L  #2,SP
+                PEA     (objStr,A3)
+                MOVE.L  (nodeList,A4),-(SP)
+                BSR     GetSelCell
+                ADDQ.L  #2,SP
+
+                LEA     (locNBPType,A4),A0
+                LEA     (typeStr,A3),A1
+                MOVEQ   #0,D0
+                MOVE.B  (A0),D0
+@0              MOVE.B  (A0)+,(A1)+
+                DBRA    D0,@0
+
+                SUBQ.L  #2,SP
+                PEA     (zoneStr,A3)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     GetSelCell
+                ADDQ.L  #2,SP
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NetChanged (theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+NETCHANGED      PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+theGlobals      DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+theString       DS.B    34
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE.L  A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+
+                MOVE    #watchCursor,-(SP)
+                BSR     SetCursor
+
+                MOVE    #0,-(SP)
+                MOVE    #0,-(SP)
+                MOVE.L  (zoneList,A4),-(SP)
+                _LDelRow
+
+                MOVE    #0,-(SP)
+                MOVE    #0,-(SP)
+                MOVE.L  (nodeList,A4),-(SP)
+                _LDelRow
+
+                MOVE.L  (myDialog,A4),-(SP)
+                MOVE    #255,-(SP)
+                BSR     HiliteOK
+
+                MOVE.L  A4,-(SP)
+                BSR     NBPClose
+
+                PEA     (myZoneName,A4)
+                BSR     NGetMyZone
+
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     NGetZoneList
+
+                SF      (autoSelect,A4)
+
+                SUBQ.L  #2,SP
+                PEA     (myZoneName,A4)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     SelectCell
+                ADDQ.L  #2,SP
+
+                SUBQ.L  #2,SP
+                PEA     (theString,A6)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     GetSelCell
+                TST.B   (SP)+
+                BEQ.S   @0
+
+                PEA     (theString,A6)
+                MOVE.L  A4,-(SP)
+                BSR     NBPOpen
+
+@0              MOVE    #arrowCursor,-(SP)
+                BSR     SetCursor
+
+Exit            MOVE.L  (SP)+,A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE ZoneChanged (theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+ZONECHANGED     PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+theGlobals      DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+theString       DS.B    34
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE.L  A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+
+                MOVE    #0,-(SP)
+                MOVE    #0,-(SP)
+                MOVE.L  (nodeList,A4),-(SP)
+                _LDelRow
+
+                MOVE.L  (myDialog,A4),-(SP)
+                MOVE    #255,-(SP)
+                BSR     HiliteOK
+
+                MOVE.L  A4,-(SP)
+                BSR     NBPClose
+
+                SUBQ.L  #2,SP
+                PEA     (theString,A6)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     GetSelCell
+                TST.B   (SP)+
+                BEQ.S   Exit
+
+                PEA     (theString,A6)
+                MOVE.L  A4,-(SP)
+                BSR     NBPOpen
+
+Exit            MOVE.L  (SP)+,A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE NodeChanged (theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+NODECHANGED     PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+theGlobals      DS.L    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+theCell         DS      Point
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVE.L  A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+
+                SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  (nodeList,A4),-(SP)
+                BSR     GetSelect
+                TST.B   (SP)+
+                BNE.S   @0
+                MOVE    #255,D0
+                BRA.S   @1
+@0              MOVEQ   #0,D0
+
+@1              MOVE.L  (myDialog,A4),-(SP)
+                MOVE    D0,-(SP)
+                BSR     HiliteOK
+
+Exit            MOVE.L  (SP)+,A4
+                UNLK    A6
+                MOVE.L  (SP)+,(SP)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE OutlineItem (theDialog: DialogPtr; itemNo: INTEGER);
+;———————————————————————————————————————————————————————————————
+OUTLINEITEM     PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+box             DS      Rect
+pnState         DS      PenState
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                MOVE.L  (theDialog,A6),A3
+
+                SUBQ.L  #4,SP
+                MOVE.L  A3,-(SP)
+                _GetWRefCon
+                MOVE.L  (SP)+,A4
+
+                MOVE.L  A3,-(SP)
+                MOVE    #ok,-(SP)
+                PEA     (box,A6)
+                BSR     GetIBox
+
+                PEA     (pnState,A6)
+                _GetPenState
+                _PenNormal
+
+                MOVEQ   #3,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _PenSize
+
+                PEA     (box,A6)
+                MOVEQ   #-4,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _InsetRect
+
+                CMP.B   #255,(outlineState,A4)
+                BNE.S   @0
+
+                MOVE.L  (0,A5),A0
+                PEA     (CurrentQDGlobals.gray,A0)
+                _PenPat
+
+@0              PEA     (box,A6)
+                MOVEQ   #16,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _FrameRoundRect
+
+                PEA     (pnState,A6)
+                _SetPenState
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE TextItem (theDialog: DialogPtr; itemNo: INTEGER);
+;———————————————————————————————————————————————————————————————
+TEXTITEM        PROC    ENTRY
+
+                IMPORT  GETINDSTRING
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+box             DS      Rect
+theString       DS.B    256
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D7/A3/A4,-(SP)
+
+                MOVE    (itemNo,A6),D7
+                LEA     (box,A6),A4
+
+                MOVE.L  (theDialog,A6),-(SP)
+                MOVE    D7,-(SP)
+                MOVE.L  A4,-(SP)
+                BSR     GetIBox
+
+                SUBQ    #2,D7
+                LEA     (theString,A6),A3
+
+                MOVE.L  A3,-(SP)
+                MOVE    #5000,-(SP)
+                MOVE    D7,-(SP)
+                JSR     GetIndString
+
+                MOVEQ   #0,D0
+                MOVE.B  (A3)+,D0
+
+                MOVE.L  A3,-(SP)
+                MOVE.L  D0,-(SP)
+                MOVE.L  A4,-(SP)
+                MOVE    #teJustCenter,-(SP)
+                _TETextBox
+
+Exit            MOVEM.L (SP)+,D7/A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE ListItem (theDialog: DialogPtr; itemNo: INTEGER);
+;———————————————————————————————————————————————————————————————
+LISTITEM        PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+box             DS      Rect
+pnState         DS      PenState
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D7/A3/A4,-(SP)
+
+                MOVE.L  (theDialog,A6),A3
+
+                SUBQ.L  #4,SP
+                MOVE.L  A3,-(SP)
+                _GetWRefCon
+                MOVE.L  (SP)+,A4
+
+                MOVE    (itemNo,A6),D7
+
+                MOVE.L  A3,-(SP)
+                MOVE    D7,-(SP)
+                PEA     (box,A6)
+                BSR     GetIBox
+
+                PEA     (pnState,A6)
+                _GetPenState
+                _PenNormal
+
+                PEA     (box,A6)
+                _FrameRect
+
+                MOVEQ   #2,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _PenSize
+
+                PEA     (box,A6)
+                MOVEQ   #-3,D0
+                MOVE    D0,-(SP)
+                MOVE    D0,-(SP)
+                _InsetRect
+
+                CMP     (selectedList,A4),D7
+                BEQ.S   @0
+
+                MOVE    #notPatCopy,-(SP)
+                _PenMode
+
+@0              PEA     (box,A6)
+                _FrameRect
+
+                SUBQ    #6,D7
+                ASL     #2,D7
+
+                MOVE.L  (GrafPort.visRgn,A3),-(SP)
+                MOVE.L  (zoneList,A4,D7),-(SP)
+                _LUpdate
+
+                PEA     (pnState,A6)
+                _SetPenState
+
+Exit            MOVEM.L (SP)+,D7/A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE FlashButton (theDialog: DialogPtr; itemNo: INTEGER);
+;———————————————————————————————————————————————————————————————
+FLASHBUTTON     PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theDialog       DS.L    1
+itemNo          DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+itemType        DS.W    1
+item            DS.L    1
+box             DS      Rect
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+
+                MOVE.L  (theDialog,A6),-(SP)
+                MOVE    (itemNo,A6),-(SP)
+                PEA     (itemType,A6)
+                PEA     (item,A6)
+                PEA     (box,A6)
+                _GetDialogItem
+
+                MOVE.L  (item,A6),-(SP)
+                MOVE    #inButton,-(SP)
+                _HiliteControl
+
+                MOVE    #8,A0
+                _Delay
+
+                MOVE.L  (item,A6),-(SP)
+                MOVE    #0,-(SP)
+                _HiliteControl
+
+Exit            UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; FUNCTION ButtonKey (theEvent: EventRecord; theGlobals: Ptr) : INTEGER;
+;———————————————————————————————————————————————————————————————
+BUTTONKEY       FUNC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+theEvent        DS.L    1
+theGlobals      DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L A3/A4,-(SP)
+
+                CLR     (Result,A6)
+                MOVE.L  (theGlobals,A6),A4
+                MOVE.L  (theEvent,A6),A3
+
+                MOVE    (EventRecord.what,A3),D0
+                CMP     #keyDown,D0
+                BNE.S   Exit
+                MOVE.L  (EventRecord.message,A3),D0
+
+                CMP.B   #CR,D0
+                BEQ.S   @0
+                CMP.B   #ETX,D0
+                BNE.S   @1
+@0              TST.B   (outlineState,A4)
+                BNE.S   Exit
+                MOVE.L  (myDialog,A4),-(SP)
+                MOVE    #ok,-(SP)
+                BSR     FlashButton
+                MOVE    #ok,(Result,A6)
+                BRA.S   Exit
+
+@1              CMP     #$351B,D0               ; ESC
+                BEQ.S   @2
+                CMP.B   #'.',D0
+                BNE.S   Exit
+                BTST    #cmdKeyBit-8,(EventRecord.modifiers,A3)
+                BEQ.S   Exit
+@2              MOVE.L  (myDialog,A4),-(SP)
+                MOVE    #cancel,-(SP)
+                BSR     FlashButton
+                MOVE    #cancel,(Result,A6)
+
+Exit            MOVEM.L (SP)+,A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; PROCEDURE ListArrow (charCode: Byte; lHandle: ListHandle);
+;———————————————————————————————————————————————————————————————
+LISTARROW       PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+charCode        DS.W    1
+lHandle         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+theCell         DS      Point
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D5-D7/A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+                MOVE.B  (charCode,A6),D7
+
+                MOVE.L  (A4),A0
+                MOVE    (ListRec.dataBounds+Rect.top,A0),D6
+                MOVE    (ListRec.dataBounds+Rect.bottom,A0),D5
+                SUBQ    #1,D5
+
+                SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  A4,-(SP)
+                BSR     GetSelect
+                TST.B   (SP)+
+                BNE.S   @1
+
+                MOVE.L  (A4),A0
+                MOVE    (ListRec.dataBounds+Rect.left,A0),(theCell.h,A6)
+
+                CMP.B   #US,D7
+                BNE.S   @0
+                MOVE    D6,(theCell.v,A6)
+                BRA.S   @6
+@0              CMP.B   #RS,D7
+                BNE.S   Exit
+                MOVE    D5,(theCell.v,A6)
+                BRA.S   @6
+
+@1              CMP     (theCell.v,A6),D6
+                BNE.S   @2
+                CMP.B   #RS,D7
+                BEQ.S   Exit
+@2              CMP     (theCell.v,A6),D5
+                BNE.S   @3
+                CMP.B   #US,D7
+                BEQ.S   Exit
+
+@3              SF      -(SP)
+                MOVE.L  (theCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                _LSetSelect
+
+                CMP.B   #RS,D7
+                BNE.S   @4
+                MOVEQ   #-1,D0
+                BRA.S   @5
+@4              CMP.B   #US,D7
+                BNE.S   Exit
+                MOVEQ   #+1,D0
+
+@5              ADD     D0,(theCell.v,A6)
+
+@6              MOVE.L  (theCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                BSR     SetSelectSeq
+
+Exit            MOVEM.L (SP)+,D5-D7/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE ListKeyNav (pKN: KNRec; lHandle: ListHandle);
+;———————————————————————————————————————————————————————————————
+LISTKEYNAV      PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+pKN             DS.L    1
+lHandle         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+dataLen         DS.W    1
+oldCell         DS      Point
+newCell         DS      Point
+theString       DS.B    34
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D7/A3/A4,-(SP)
+
+                MOVE.L  (lHandle,A6),A4
+                LEA     (theString,A6),A3
+
+                MOVE.L  (A4),A0
+                MOVE.L  (ListRec.dataBounds+Rect.topLeft,A0),(newCell,A6)
+                MOVE    (ListRec.dataBounds+Rect.bottom,A0),D7
+
+@0              MOVE    #32,(dataLen,A6)
+                PEA     (1,A3)
+                PEA     (dataLen,A6)
+                MOVE.L  (newCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                _LGetCell
+                MOVE.B  (dataLen+1,A6),(A3)
+
+                SUBQ.L  #2,SP
+                MOVE.L  A3,-(SP)
+                MOVE.L  (pKN,A6),-(SP)
+                BSR     KNCompString
+                TST     (SP)+
+                BLE.S   @1
+
+                ADDQ    #1,(newCell.v,A6)
+
+                CMP     (newCell.v,A6),D7
+                BGT.S   @0
+
+                SUBQ    #1,(newCell.v,A6)
+
+@1              SUBQ.L  #2,SP
+                PEA     (oldCell,A6)
+                MOVE.L  A4,-(SP)
+                BSR     GetSelect
+                TST.B   (SP)+
+                BEQ.S   @2
+
+                MOVE.L  (newCell,A6),D0
+                CMP.L   (oldCell,A6),D0
+                BEQ.S   Exit
+
+                SF      -(SP)
+                MOVE.L  (oldCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                _LSetSelect
+
+@2              MOVE.L  (newCell,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                BSR     SetSelect
+
+Exit            MOVEM.L (SP)+,D7/A3/A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; PROCEDURE ListKey (theEvent: EventRecord; theGlobals: Ptr);
+;———————————————————————————————————————————————————————————————
+LISTKEY         PROC    ENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+theEvent        DS.L    1
+theGlobals      DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D7/A2-A4,-(SP)
+
+                MOVE.L  (theGlobals,A6),A4
+                MOVE.L  (theEvent,A6),A3
+                MOVE.L  (EventRecord.message,A3),D7
+
+                CMP.B   #HT,D7
+                BNE.S   @2
+                PEA     (keyNav,A4)
+                BSR     KNInit
+                MOVE    (selectedList,A4),D0
+                BTST    #shiftKeyBit-8,(EventRecord.modifiers,A3)
+                BEQ.S   @0
+                SUBQ    #1,D0
+                CMP     #6,D0
+                BGE.S   @1
+                MOVEQ   #7,D0
+                BRA.S   @1
+@0              ADDQ    #1,D0
+                CMP     #7,D0
+                BLE.S   @1
+                MOVEQ   #6,D0
+@1              MOVE.L  (myDialog,A4),-(SP)
+                MOVE    D0,-(SP)
+                BSR     SelectList
+                BRA.S   Exit
+
+@2              MOVE    (selectedList,A4),D0
+                SUBQ    #6,D0
+                ASL     #2,D0
+                MOVE.L  (zoneList,A4,D0),A2
+                MOVE.L  (A2),A0
+                MOVE    (ListRec.dataBounds+Rect.top,A0),D0
+                CMP     (ListRec.dataBounds+Rect.bottom,A0),D0
+                BEQ.S   Exit
+                SF      (autoSelect,A4)
+                CMP.B   #RS,D7
+                BEQ.S   @3
+                CMP.B   #US,D7
+                BNE.S   @4
+@3              MOVE.B  D7,-(SP)
+                MOVE.L  A2,-(SP)
+                BSR     ListArrow
+                PEA     (keyNav,A4)
+                BSR     KNInit
+                BRA.S   Exit
+@4              SUBQ.L  #2,SP
+                MOVE.L  A3,-(SP)
+                PEA     (keyNav,A4)
+                BSR     KNKey
+                TST.B   (SP)+
+                BEQ.S   Exit
+                PEA     (keyNav,A4)
+                MOVE.L  A2,-(SP)
+                BSR     ListKeyNav
+
+Exit            MOVEM.L (SP)+,D7/A2-A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADDQ.L  #ParamSize,SP
+                JMP     (A0)
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; FUNCTION MyFilter (theDialog: DialogPtr; VAR theEvent: EventRecord;
+;                    VAR itemHit: INTEGER) : BOOLEAN;
+;———————————————————————————————————————————————————————————————
+MYFILTER        FUNC    ENTRY
+
+                IMPORT  GETBRIDGEADDRESS
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+theDialog       DS.L    1
+theEvent        DS.L    1
+itemHit         DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+thePt           DS      Point
+theCell         DS      Point
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                CLR     (Result,A6)
+                MOVE.L  (theDialog,A6),A3
+                SUBQ.L  #4,SP
+                MOVE.L  A3,-(SP)
+                _GetWRefCon
+                MOVE.L  (SP)+,A4
+
+                MOVE.L  (theEvent,A6),A0
+                MOVE    (EventRecord.what,A0),D0
+
+@0              CMP     #nullEvent,D0
+                BEQ.S   @1
+                CMP     #updateEvt,D0
+                BNE.S   @10
+                CMP.L   (EventRecord.message,A0),A3
+                BEQ     Exit
+
+@1              SUBQ.L  #2,SP
+                JSR     GetBridgeAddress
+                TST     (SP)+
+                SNE     D0
+                CMP.B   (hasBridge,A4),D0
+                BEQ.S   @2
+                MOVE.B  D0,(hasBridge,A4)
+                MOVE.L  A4,-(SP)
+                BSR     NetChanged
+@2              TST.L   (lookupPB,A4)
+                BEQ     Exit
+                MOVE.L  A4,-(SP)
+                BSR     NBPRead
+                BRA     Exit
+
+@10             CMP     #keyDown,D0
+                BEQ.S   @11
+                CMP     #autoKey,D0
+                BNE     @20
+
+@11             SUBQ.L  #2,SP
+                MOVE.L  (theEvent,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                BSR     ButtonKey
+                MOVE    (SP)+,D0
+                BEQ.S   @12
+                MOVE.L  (itemHit,A6),A0
+                MOVE    D0,(A0)
+                ST      (Result,A6)
+                BRA     Exit
+
+@12             SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     GetSelect
+                ADDQ.L  #2,SP
+                MOVE.L  (theCell,A6),D7
+                SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  (nodeList,A4),-(SP)
+                BSR     GetSelect
+                ADDQ.L  #2,SP
+                MOVE.L  (theCell,A6),D6
+
+                MOVE.L  (theEvent,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                BSR     ListKey
+
+                MOVE    (selectedList,A4),D0
+                CMP     #6,D0
+                BNE.S   @13
+                SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     GetSelect
+                ADDQ.L  #2,SP
+                CMP.L   (theCell,A6),D7
+                BEQ     Exit
+                MOVE.L  A4,-(SP)
+                BSR     ZoneChanged
+                BRA     Exit
+@13             CMP     #7,D0
+                BNE     Exit
+                SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  (nodeList,A4),-(SP)
+                BSR     GetSelect
+                ADDQ.L  #2,SP
+                CMP.L   (theCell,A6),D6
+                BEQ     Exit
+                MOVE.L  A4,-(SP)
+                BSR     NodeChanged
+                BRA     Exit
+
+@20             CMP     #mouseDown,D0
+                BNE     Exit
+
+@21             MOVE.L  (theEvent,A6),A0
+                MOVE.L  (EventRecord.where,A0),(thePt,A6)
+                PEA     (thePt,A6)
+                _GlobalToLocal
+                SUBQ.L  #2,SP
+                MOVE.L  A3,-(SP)
+                MOVE.L  (thePt,A6),-(SP)
+                _FindDialogItem
+                MOVE    (SP)+,D7
+                ADDQ    #1,D7
+                CMP     #6,D7
+                BLT     Exit
+                CMP     #7,D7
+                BGT     Exit
+                PEA     (keyNav,A4)
+                BSR     KNInit
+                CMP     (selectedList,A4),D7
+                BEQ.S   @22
+                MOVE.L  A3,-(SP)
+                MOVE    D7,-(SP)
+                BSR     SelectList
+@22             MOVE    D7,D0
+                SUBQ    #6,D0
+                ASL     #2,D0
+                MOVE.L  (zoneList,A4,D0),A2
+                SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  A2,-(SP)
+                BSR     GetSelect
+                ADDQ.L  #2,SP
+                MOVE.L  (theCell,A6),D6
+
+                SUBQ.L  #2,SP
+                MOVE.L  (thePt,A6),-(SP)
+                MOVE.L  (theEvent,A6),A0
+                MOVE    (EventRecord.modifiers,A0),-(SP)
+                MOVE.L  A2,-(SP)
+                _LClick
+                MOVE.B  (SP)+,D5
+
+                SUBQ.L  #2,SP
+                PEA     (theCell,A6)
+                MOVE.L  A2,-(SP)
+                BSR     GetSelect
+                MOVE.B  (SP)+,D4
+                CMP.L   (theCell,A6),D6
+                BEQ.S   @26
+                SF      (autoSelect,A4)
+                CMP     #6,D7
+                BNE.S   @25
+                MOVE.L  A4,-(SP)
+                BSR     ZoneChanged
+                BRA.S   @26
+@25             CMP     #7,D7
+                BNE.S   @26
+                MOVE.L  A4,-(SP)
+                BSR     NodeChanged
+@26             TST.B   D5
+                BEQ.S   Exit
+                CMP     #7,D7
+                BNE.S   Exit
+                TST.B   D4
+                BEQ.S   Exit
+                MOVE.L  A3,-(SP)
+                MOVE    #ok,-(SP)
+                BSR     FlashButton
+                MOVE.L  (itemHit,A6),A0
+                MOVE    #ok,(A0)
+                ST      (Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADD     #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; FUNCTION IPCBrowser (default: BOOLEAN; VAR theLocation: EntityName;
+;                      theLocNBPType: Str32) : OSErr;
+;———————————————————————————————————————————————————————————————
+IPCBROWSER      FUNC    EXPORT
+
+                IMPORT  GETBRIDGEADDRESS
+
+theDialogID     EQU     5000
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+default         DS.W    1
+theLocation     DS.L    1
+theLocNBPType   DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+itemHit         DS.W    1
+savePort        DS.L    1
+theString       DS.B    34
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame,EntityName
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE    #paramErr,(Result,A6)
+
+                TST.L   (theLocation,A6)
+                BEQ     Exit
+                MOVE.L  (theLocNBPType,A6),D0
+                BEQ     Exit
+                MOVE.L  D0,A0
+                TST.B   (A0)
+                BEQ     Exit
+                SUBQ.L  #2,SP
+                MOVE.L  A0,-(SP)
+                BSR     Wildcard
+                TST.B   (SP)+
+                BNE     Exit
+
+                MOVE    #watchCursor,-(SP)
+                BSR     SetCursor
+
+                MOVE    #resNotFound,(Result,A6)
+
+                MOVE    #theDialogID,-(SP)
+                BSR     CenterDialog
+
+                SUBQ.L  #4,SP
+                MOVE    #theDialogID,-(SP)
+                MOVE.L  #NIL,-(SP)
+                PEA     (-1)
+                _GetNewDialog
+                MOVE.L  (SP)+,D0
+                BEQ     Exit
+                MOVE.L  D0,A3
+
+                PEA     (savePort,A6)
+                _GetPort
+                MOVE.L  A3,-(SP)
+                _SetPort
+
+                MOVE.L  #GlobalSize,D0
+                _NewPtrClear
+                MOVE    D0,(Result,A6)
+                BNE     Error0
+                MOVE.L  A0,A4
+
+                MOVE.L  A3,-(SP)
+                MOVE.L  A4,-(SP)
+                _SetWRefCon
+
+                MOVE.L  A3,(myDialog,A4)
+
+                PEA     (keyNav,A4)
+                BSR     KNInit
+
+                ST      (autoSelect,A4)
+                MOVE.B  (default,A6),(hasDefault,A4)
+                MOVE.L  (theLocation,A6),(nbpLocation,A4)
+
+                MOVE.L  (theLocNBPType,A6),A0
+                LEA     (locNBPType,A4),A1
+                MOVEQ   #0,D0
+                MOVE.B  (A0),D0
+@0              MOVE.B  (A0)+,(A1)+
+                DBRA    D0,@0
+
+                MOVE    #memFullErr,(Result,A6)
+
+                SUBQ.L  #4,SP
+                MOVE.L  A3,-(SP)
+                MOVE    #6,-(SP)
+                MOVE    #1,-(SP)
+                BSR     NewList
+                MOVE.L  (SP)+,(zoneList,A4)
+                BEQ     Error1
+
+                SUBQ.L  #4,SP
+                MOVE.L  A3,-(SP)
+                MOVE    #7,-(SP)
+                MOVE    #2,-(SP)
+                BSR     NewList
+                MOVE.L  (SP)+,(nodeList,A4)
+                BEQ     Error2
+
+                SUBQ.L  #2,SP
+                JSR     GetBridgeAddress
+                TST     (SP)+
+                SNE     (hasBridge,A4)
+
+                PEA     (myZoneName,A4)
+                BSR     NGetMyZone
+
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     NGetZoneList
+
+                TST.B   (hasDefault,A4)
+                BEQ.S   @2
+
+                MOVE.L  (nbpLocation,A4),A0
+                LEA     (zoneStr,A0),A0
+                CMP.B   #1,(A0)
+                BNE.S   @1
+                CMP.B   #'*',(1,A0)
+                BNE.S   @1
+                LEA     (myZoneName,A4),A0
+
+@1              SUBQ.L  #2,SP
+                MOVE.L  A0,-(SP)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     SelectCell
+                TST.B   (SP)+
+                BNE.S   @3
+
+                SF      (autoSelect,A4)
+
+@2              SUBQ.L  #2,SP
+                PEA     (myZoneName,A4)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     SelectCell
+                ADDQ.L  #2,SP
+
+@3              SUBQ.L  #2,SP
+                PEA     (theString,A6)
+                MOVE.L  (zoneList,A4),-(SP)
+                BSR     GetSelCell
+                TST.B   (SP)+
+                BEQ.S   @4
+
+                PEA     (theString,A6)
+                MOVE.L  A4,-(SP)
+                BSR     NBPOpen
+
+@4              MOVE.L  A3,-(SP)
+                MOVE    #3,-(SP)
+                PEA     TextItem
+                BSR     SetIHook
+
+                MOVE.L  A3,-(SP)
+                MOVE    #4,-(SP)
+                PEA     TextItem
+                BSR     SetIHook
+
+                MOVE.L  A3,-(SP)
+                MOVE    #5,-(SP)
+                PEA     TextItem
+                BSR     SetIHook
+
+                MOVE.L  A3,-(SP)
+                MOVE    #6,-(SP)
+                PEA     ListItem
+                BSR     SetIHook
+
+                MOVE.L  A3,-(SP)
+                MOVE    #7,-(SP)
+                PEA     ListItem
+                BSR     SetIHook
+
+                MOVE.L  A3,-(SP)
+                MOVE    #8,-(SP)
+                PEA     OutlineItem
+                BSR     SetIHook
+
+                MOVE    #7,(selectedList,A4)
+
+                MOVE.L  A3,-(SP)
+                MOVE    #255,-(SP)
+                BSR     HiliteOK
+
+                MOVE.L  A3,-(SP)
+                _ShowWindow
+
+                MOVE    #arrowCursor,-(SP)
+                BSR     SetCursor
+
+Loop            PEA     MyFilter
+                PEA     (itemHit,A6)
+                _ModalDialog
+                MOVE    (itemHit,A6),D0
+
+                CMP     #1,D0
+                BNE.S   @0
+
+                MOVE.L  (theLocation,A6),-(SP)
+                MOVE.L  A4,-(SP)
+                BSR     GetLocation
+
+                MOVE    #noErr,(Result,A6)
+                BRA.S   @1
+
+@0              CMP     #2,D0
+                BNE.S   Loop
+
+                MOVE    #userCanceledErr,(Result,A6)
+
+@1              MOVE.L  A3,-(SP)
+                _HideWindow
+
+                MOVE.L  A4,-(SP)
+                BSR     NBPClose
+
+                MOVE.L  (nodeList,A4),-(SP)
+                _LDispose
+
+Error2          MOVE.L  (zoneList,A4),-(SP)
+                _LDispose
+
+Error1          MOVE.L  A4,A0
+                _DisposePtr
+
+Error0          MOVE.L  (savePort,A6),-(SP)
+                _SetPort
+
+                MOVE.L  A3,-(SP)
+                _DisposeDialog
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                MOVE.L  (SP)+,A0
+                ADD     #ParamSize,SP
+                JMP     (A0)
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+                END

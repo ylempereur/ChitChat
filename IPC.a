@@ -1,0 +1,1379 @@
+; File IPC.a
+;———————————————————————————————————————————————————————————————
+;
+; IPC Driver v1.0d14
+;
+;       Yves Lempereur
+;
+; MODIFICATION HISTORY:
+;       10/20/93  YL    Project begins
+;       02/28/95  YL    Added atomic instructions (MC68020)
+;
+;———————————————————————————————————————————————————————————————
+                CASE    OBJ
+;———————————————————————————————————————————————————————————————
+                PRINT   PUSH,OFF
+
+                INCLUDE 'Types.a'
+                INCLUDE 'Errors.a'
+                INCLUDE 'Memory.a'
+                INCLUDE 'OSUtils.a'
+                INCLUDE 'Devices.a'
+                INCLUDE 'AppleTalk.a'
+                INCLUDE 'ADSP.a'
+                INCLUDE 'Files.a'
+
+                PRINT   POP
+;———————————————————————————————————————————————————————————————
+NIL             EQU     0
+IntMask         EQU     $0700
+;———————————————————————————————————————————————————————————————
+sendQSize       EQU     1024
+recvQSize       EQU     1024
+;———————————————————————————————————————————————————————————————
+kIPCNoGlobalsErr        EQU     -32000
+kIPCNotInitErr          EQU     -32001
+kIPCNoSessionErr        EQU     -32002
+kIPCBadReqErr           EQU     -32003
+kIPCNotFoundErr         EQU     -32004
+;———————————————————————————————————————————————————————————————
+MSCParamBlock   RECORD  0
+                ORG     MSCParamBlock
+mpp             DS      MPPParamBlock
+                ORG     MSCParamBlock
+atp             DS      ATPParamBlock
+                ORG     MSCParamBlock
+dsp             DS      DSPParamBlock
+                ORG
+saveA3          DS.L    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+                MACRO
+                IPCParamHeader
+qLink           DS.L    1
+saveA2          DS.L    1
+saveA5          DS.L    1
+ioCompletion    DS.L    1
+ioResult        DS.W    1
+                MEND
+;———————————————————————————————————————————————————————————————
+IPCOpenPB       RECORD  0
+                IPCParamHeader
+sessRefNum      DS.W    1
+localSocket     DS.B    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+IPCClosePB      RECORD  0
+                IPCParamHeader
+sessRefNum      DS.W    1
+abort           DS.B    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+IPCStartPB      RECORD  0
+                IPCParamHeader
+sessRefNum      DS.W    1
+locationName    DS.L    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+IPCEndPB        RECORD  0
+                IPCParamHeader
+sessRefNum      DS.W    1
+abort           DS.B    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+IPCListenPB     RECORD  0
+                IPCParamHeader
+sessRefNum      DS.W    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+IPCReadPB       RECORD  0
+                IPCParamHeader
+sessRefNum      DS.W    1
+bufferLength    DS.W    1
+actualLength    DS.W    1
+bufferPtr       DS.L    1
+more            DS.B    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+IPCWritePB      RECORD  0
+                IPCParamHeader
+sessRefNum      DS.W    1
+bufferLength    DS.W    1
+actualLength    DS.W    1
+bufferPtr       DS.L    1
+more            DS.B    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+IPCParamBlock   RECORD  0               ; IPC Parameter Block
+                IPCParamHeader
+                ORG     IPCParamBlock
+openPB          DS      IPCOpenPB
+                ORG     IPCParamBlock
+closePB         DS      IPCClosePB
+                ORG     IPCParamBlock
+startPB         DS      IPCStartPB
+                ORG     IPCParamBlock
+endPB           DS      IPCEndPB
+                ORG     IPCParamBlock
+listenPB        DS      IPCListenPB
+                ORG     IPCParamBlock
+readPB          DS      IPCReadPB
+                ORG     IPCParamBlock
+writePB         DS      IPCWritePB
+                ORG
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+IPCSessRec      RECORD  0               ; IPC Session Record
+qLink           DS.L    1
+refNum          DS.W    1
+flags           DS.W    1
+ccbPtr          DS.L    1
+sendQueue       DS.L    1
+recvQueue       DS.L    1
+attnPtr         DS.L    1
+nbpEntity       DS.L    1
+nbpBuffer       DS.L    1
+paramBlock0     DS.L    1
+paramBlock1     DS.L    1
+paramBlock2     DS.L    1
+paramBlock3     DS.L    1
+ccbRefNum       DS.W    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+Globals         RECORD  0               ; IPC Globals
+refCount        DS.W    1
+sessQueue       DS      QHdr
+mppRefNum       DS.W    1
+atpRefNum       DS.W    1
+xppRefNum       DS.W    1
+dspRefNum       DS.W    1
+GlobalSize      EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+                SEG     'Main'
+;———————————————————————————————————————————————————————————————
+                MACHINE MC68020
+;———————————————————————————————————————————————————————————————
+IPCVars         PROC    ENTRY
+
+                DC.L    0
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; Routine name  InitQueue
+;
+; On entry      A1: theQueue (pointer)
+;———————————————————————————————————————————————————————————————
+INITQUEUE       PROC    ENTRY
+
+                WITH    QHdr
+
+                CLR     (qFlags,A1)
+                CLR.L   (qHead,A1)
+                CLR.L   (qTail,A1)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; Routine name  Enqueue
+;
+; On entry      A0: qEntry (pointer)
+;               A1: theQueue (pointer)
+;———————————————————————————————————————————————————————————————
+ENQUEUE         PROC    ENTRY
+
+                WITH    QHdr,QElem
+
+                MOVE.L  A2,-(SP)
+                CLR.L   (qLink,A0)
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+                MOVE.L  (qTail,A1),A2
+                TST.L   A2
+                BNE.S   @0
+                MOVE.L  A0,(qHead,A1)
+                BRA.S   @1
+@0              MOVE.L  A0,(qLink,A2)
+@1              MOVE.L  A0,(qTail,A1)
+                MOVE    (SP)+,SR
+                MOVE.L  (SP)+,A2
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; Routine name  Dequeue
+;
+; On entry      A0: qEntry (pointer)
+;               A1: theQueue (pointer)
+;———————————————————————————————————————————————————————————————
+DEQUEUE         PROC    ENTRY
+
+                WITH    QHdr,QElem
+
+                MOVEM.L A2/A3,-(SP)
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+                SUB.L   A2,A2
+                MOVE.L  (qHead,A1),A3
+@0              TST.L   A3
+                BEQ.S   @4
+                CMP.L   A3,A0
+                BEQ.S   @1
+                MOVE.L  A3,A2
+                MOVE.L  (qLink,A2),A3
+                BRA.S   @0
+@1              MOVE.L  (qLink,A3),A3
+                TST.L   A2
+                BNE.S   @2
+                MOVE.L  A3,(qHead,A1)
+                BRA.S   @3
+@2              MOVE.L  A3,(qLink,A2)
+@3              TST.L   A3
+                BNE.S   @4
+                MOVE.L  A2,(qTail,A1)
+@4              MOVE    (SP)+,SR
+                MOVEM.L (SP)+,A2/A3
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; Routine name  NewRefNum
+;
+; On exit       D0: refNum (word)
+;———————————————————————————————————————————————————————————————
+NEWREFNUM       FUNC    ENTRY
+
+                WITH    Globals
+
+                MOVE    D1,-(SP)
+                MOVE    (refCount,A4),D1
+@0              MOVE    D1,D0
+@1              ADDQ    #1,D0
+                BEQ.S   @1
+                CAS     D1,D0,(refCount,A4)
+                BNE.S   @0
+                MOVE    (SP)+,D1
+                RTS
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; Routine name  GetSessRec
+;
+; On entry      D0: refNum (word)
+;
+; On exit       A0: session record (pointer)
+;———————————————————————————————————————————————————————————————
+GETSESSREC      FUNC    ENTRY
+
+                WITH    Globals
+
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+                MOVE.L  (sessQueue.qHead,A4),A0
+@0              TST.L   A0
+                BEQ.S   @1
+                CMP     (IPCSessRec.refNum,A0),D0
+                BEQ.S   @1
+                MOVE.L  (IPCSessRec.qLink,A0),A0
+                BRA.S   @0
+@1              MOVE    (SP)+,SR
+                TST.L   A0
+                RTS
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; pascal OSErr IPCInit(void);
+;———————————————————————————————————————————————————————————————
+IPCINIT         FUNC    EXPORT
+
+                IMPORT  GETDCTLENTRY
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+RetAddr         DS.L    1
+A6Link          DS.L    1
+paramBlock      DS      ParamBlockRec
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                TST.L   (IPCVars,PC)
+                BNE     @98
+
+                MOVE.L  #GlobalSize,D0
+                _NewPtrClear
+                BNE     @96
+                MOVE.L  A0,A4
+
+                LEA     (paramBlock,A6),A0
+                LEA     #'.MPP',A1
+                MOVE.L  A1,(IOParam.ioNamePtr,A0)
+                MOVE.B  #fsCurPerm,(IOParam.ioPermssn,A0)
+                _PBOpenSync
+                BNE     @94
+                MOVE    (IOParam.ioRefNum,A0),(mppRefNum,A4)
+
+                SUBQ.L  #4,SP
+                MOVE    (mppRefNum,A4),-(SP)
+                JSR     GetDCtlEntry
+                MOVE.L  (SP)+,A0
+                MOVE.L  (A0),A0
+                CMP.B   #53,(DCtlEntry.dCtlQHdr.qFlags+1,A0)
+                BLO     @92
+
+                LEA     (paramBlock,A6),A0
+                LEA     #'.ATP',A1
+                MOVE.L  A1,(IOParam.ioNamePtr,A0)
+                MOVE.B  #fsCurPerm,(IOParam.ioPermssn,A0)
+                _PBOpenSync
+                BNE.S   @90
+                MOVE    (IOParam.ioRefNum,A0),(atpRefNum,A4)
+
+                LEA     (paramBlock,A6),A0
+                LEA     #'.XPP',A1
+                MOVE.L  A1,(IOParam.ioNamePtr,A0)
+                MOVE.B  #fsCurPerm,(IOParam.ioPermssn,A0)
+                _PBOpenSync
+                BNE.S   @88
+                MOVE    (IOParam.ioRefNum,A0),(xppRefNum,A4)
+
+                LEA     (paramBlock,A6),A0
+                LEA     #'.DSP',A1
+                MOVE.L  A1,(IOParam.ioNamePtr,A0)
+                MOVE.B  #fsCurPerm,(IOParam.ioPermssn,A0)
+                _PBOpenSync
+                BNE.S   @86
+                MOVE    (IOParam.ioRefNum,A0),(dspRefNum,A4)
+
+                SUBQ.L  #4,SP
+                MOVE    (dspRefNum,A4),-(SP)
+                JSR     GetDCtlEntry
+                MOVE.L  (SP)+,A0
+                MOVE.L  (A0),A0
+                CMP.B   #4,(DCtlEntry.dCtlQHdr.qFlags+1,A0)
+                BLO.S   @85
+
+                LEA     (sessQueue,A4),A1
+                BSR     InitQueue
+
+                MOVE    #0,(refCount,A4)
+
+                LEA     (IPCVars,PC),A1
+                MOVE.L  A4,(A1)
+
+                MOVEQ   #noErr,D7
+                BRA.S   @99
+
+@85             MOVEQ   #controlErr,D7
+                BRA.S   @87
+
+@86             MOVE    D0,D7
+@87             BRA.S   @89
+
+@88             MOVE    D0,D7
+@89             BRA.S   @91
+
+@90             MOVE    D0,D7
+@91             BRA.S   @93
+
+@92             MOVEQ   #controlErr,D7
+@93             BRA.S   @95
+
+@94             MOVE    D0,D7
+@95             MOVE.L  A4,A0
+                _DisposePtr
+                BRA.S   @97
+
+@96             MOVE    #kIPCNoGlobalsErr,D7
+@97             BRA.S   @99
+
+@98             MOVEQ   #noErr,D7
+
+@99             MOVE    D7,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                RTS
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; pascal OSErr IPCOpen(IPCParamBlockPtr pb);
+;———————————————————————————————————————————————————————————————
+IPCOPEN         FUNC    EXPORT
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+pb              DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+paramBlock      DS      DSPParamBlock
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE.L  (pb,A6),A3
+                MOVE.L  A5,(IPCOpenPB.saveA5,A3)
+                MOVE.L  #NIL,(IPCOpenPB.ioCompletion,A3)
+                MOVE    #1,(IPCOpenPB.ioResult,A3)
+
+                MOVE.L  (IPCVars,PC),D0
+                BEQ     @98
+                MOVE.L  D0,A4
+
+                MOVE.L  #IPCSessRec.sizeof,D0
+                _NewPtrClear
+                BNE     @96
+                MOVE.L  A0,A2
+
+                BSR     NewRefNum
+                MOVE    D0,(IPCSessRec.refNum,A2)
+
+                CLR     (IPCSessRec.flags,A2)
+
+                MOVE.L  #TRCCB.sizeof,D0
+                _NewPtr
+                BNE     @94
+                MOVE.L  A0,(IPCSessRec.ccbPtr,A2)
+
+                MOVE.L  #sendQSize,D0
+                _NewPtr
+                BNE     @92
+                MOVE.L  A0,(IPCSessRec.sendQueue,A2)
+
+                MOVE.L  #recvQSize,D0
+                _NewPtr
+                BNE     @90
+                MOVE.L  A0,(IPCSessRec.recvQueue,A2)
+
+                MOVE.L  #attnBufSize,D0
+                _NewPtr
+                BNE     @88
+                MOVE.L  A0,(IPCSessRec.attnPtr,A2)
+
+                MOVE.L  #EntityName.sizeof,D0
+                _NewPtr
+                BNE     @86
+                MOVE.L  A0,(IPCSessRec.nbpEntity,A2)
+
+                MOVE.L  #NTElement.sizeof,D0
+                _NewPtr
+                BNE     @84
+                MOVE.L  A0,(IPCSessRec.nbpBuffer,A2)
+
+                MOVE.L  #MSCParamBlock.sizeof,D0
+                _NewPtrClear
+                BNE     @82
+                MOVE.L  A0,(IPCSessRec.paramBlock0,A2)
+
+                MOVE.L  #MSCParamBlock.sizeof,D0
+                _NewPtrClear
+                BNE     @80
+                MOVE.L  A0,(IPCSessRec.paramBlock1,A2)
+
+                MOVE.L  #MSCParamBlock.sizeof,D0
+                _NewPtrClear
+                BNE     @78
+                MOVE.L  A0,(IPCSessRec.paramBlock2,A2)
+
+                MOVE.L  #MSCParamBlock.sizeof,D0
+                _NewPtrClear
+                BNE     @76
+                MOVE.L  A0,(IPCSessRec.paramBlock3,A2)
+
+                MOVE.L  A2,A0
+                LEA     (sessQueue,A4),A1
+                BSR     Enqueue
+
+                MOVE.L  A2,(IPCOpenPB.saveA2,A3)
+
+                LEA     (paramBlock,A6),A0
+                MOVE    (dspRefNum,A4),(DSPParamBlock.ioCRefNum,A0)
+                MOVE    #dspInit,(DSPParamBlock.csCode,A0)
+                MOVE.L  (IPCSessRec.ccbPtr,A2),(DSPParamBlock.ccbPtr,A0)
+                MOVE.L  #NIL,(DSPParamBlock.userRoutine,A0)
+                MOVE    #sendQSize,(DSPParamBlock.sendQSize,A0)
+                MOVE.L  (IPCSessRec.sendQueue,A2),(DSPParamBlock.sendQueue,A0)
+                MOVE    #recvQSize,(DSPParamBlock.recvQSize,A0)
+                MOVE.L  (IPCSessRec.recvQueue,A2),(DSPParamBlock.recvQueue,A0)
+                MOVE.L  (IPCSessRec.attnPtr,A2),(DSPParamBlock.attnPtr,A0)
+                MOVE.B  (IPCOpenPB.localSocket,A3),(DSPParamBlock.localSocket,A0)
+                _PBControlSync
+                BNE.S   @75
+                MOVE    (DSPParamBlock.ccbRefNum,A0),(IPCSessRec.ccbRefNum,A2)
+                MOVE.B  (DSPParamBlock.localSocket,A0),(IPCOpenPB.localSocket,A3)
+
+                MOVE    (IPCSessRec.refNum,A2),(IPCOpenPB.sessRefNum,A3)
+                MOVEQ   #noErr,D7
+                BRA.S   @99
+
+@75             MOVE    D0,D7
+                MOVE.L  A2,A0
+                LEA     (sessQueue,A4),A1
+                BSR     Dequeue
+
+                MOVE.L  (IPCSessRec.paramBlock3,A2),A0
+                _DisposePtr
+                BRA.S   @77
+
+@76             MOVE    D0,D7
+@77             MOVE.L  (IPCSessRec.paramBlock2,A2),A0
+                _DisposePtr
+                BRA.S   @79
+
+@78             MOVE    D0,D7
+@79             MOVE.L  (IPCSessRec.paramBlock1,A2),A0
+                _DisposePtr
+                BRA.S   @81
+
+@80             MOVE    D0,D7
+@81             MOVE.L  (IPCSessRec.paramBlock0,A2),A0
+                _DisposePtr
+                BRA.S   @83
+
+@82             MOVE    D0,D7
+@83             MOVE.L  (IPCSessRec.nbpBuffer,A2),A0
+                _DisposePtr
+                BRA.S   @85
+
+@84             MOVE    D0,D7
+@85             MOVE.L  (IPCSessRec.nbpEntity,A2),A0
+                _DisposePtr
+                BRA.S   @87
+
+@86             MOVE    D0,D7
+@87             MOVE.L  (IPCSessRec.attnPtr,A2),A0
+                _DisposePtr
+                BRA.S   @89
+
+@88             MOVE    D0,D7
+@89             MOVE.L  (IPCSessRec.recvQueue,A2),A0
+                _DisposePtr
+                BRA.S   @91
+
+@90             MOVE    D0,D7
+@91             MOVE.L  (IPCSessRec.sendQueue,A2),A0
+                _DisposePtr
+                BRA.S   @93
+
+@92             MOVE    D0,D7
+@93             MOVE.L  (IPCSessRec.ccbPtr,A2),A0
+                _DisposePtr
+                BRA.S   @95
+
+@94             MOVE    D0,D7
+@95             MOVE.L  A2,A0
+                _DisposePtr
+                BRA.S   @97
+
+@96             MOVE    D0,D7
+@97             BRA.S   @99
+
+@98             MOVE    #kIPCNotInitErr,D7
+
+@99             MOVE    D7,(IPCOpenPB.ioResult,A3)
+                MOVE    D7,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                RTD     #ParamSize
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; pascal OSErr IPCClose(IPCParamBlockPtr pb);
+;———————————————————————————————————————————————————————————————
+IPCCLOSE        FUNC    EXPORT
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+pb              DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+paramBlock      DS      DSPParamBlock
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE.L  (pb,A6),A3
+                MOVE.L  A5,(IPCClosePB.saveA5,A3)
+                MOVE.L  #NIL,(IPCClosePB.ioCompletion,A3)
+                MOVE    #1,(IPCClosePB.ioResult,A3)
+
+                MOVE.L  (IPCVars,PC),D0
+                BEQ     @98
+                MOVE.L  D0,A4
+
+                MOVE    (IPCClosePB.sessRefNum,A3),D0
+                BSR     GetSessRec
+                BEQ.S   @96
+                MOVE.L  A0,A2
+
+                MOVE.L  A2,(IPCClosePB.saveA2,A3)
+
+                LEA     (paramBlock,A6),A0
+                MOVE    (dspRefNum,A4),(DSPParamBlock.ioCRefNum,A0)
+                MOVE    #dspRemove,(DSPParamBlock.csCode,A0)
+                MOVE    (IPCSessRec.ccbRefNum,A2),(DSPParamBlock.ccbRefNum,A0)
+                MOVE.B  (IPCClosePB.abort,A3),(DSPParamBlock.abort,A0)
+                _PBControlSync
+                BNE.S   @95
+
+                MOVE.L  A2,A0
+                LEA     (sessQueue,A4),A1
+                BSR     Dequeue
+
+                MOVE.L  (IPCSessRec.paramBlock3,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.paramBlock2,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.paramBlock1,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.paramBlock0,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.nbpBuffer,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.nbpEntity,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.attnPtr,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.recvQueue,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.sendQueue,A2),A0
+                _DisposePtr
+
+                MOVE.L  (IPCSessRec.ccbPtr,A2),A0
+                _DisposePtr
+
+                MOVE.L  A2,A0
+                _DisposePtr
+
+                MOVEQ   #noErr,D7
+                BRA.S   @99
+
+@95             MOVE    D0,D7
+                BRA.S   @97
+
+@96             MOVE    #kIPCNoSessionErr,D7
+@97             BRA.S   @99
+
+@98             MOVE    #kIPCNotInitErr,D7
+
+@99             MOVE    D7,(IPCClosePB.ioResult,A3)
+                MOVE    D7,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                RTD     #ParamSize
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; pascal OSErr IPCStart(IPCParamBlockPtr pb, Boolean asyncFlag);
+;———————————————————————————————————————————————————————————————
+IPCSTART        FUNC    EXPORT
+
+                IMPORT  NBPSETENTITY,START0
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+pb              DS.L    1
+asyncFlag       DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE.L  (pb,A6),A3
+                MOVE.L  A5,(IPCStartPB.saveA5,A3)
+                TST.B   (asyncFlag,A6)
+                BNE.S   @0
+                MOVE.L  #NIL,(IPCStartPB.ioCompletion,A3)
+@0              MOVE    #1,(IPCStartPB.ioResult,A3)
+
+                MOVE.L  (IPCVars,PC),D0
+                BEQ     @97
+                MOVE.L  D0,A4
+
+                MOVE    (IPCStartPB.sessRefNum,A3),D0
+                BSR     GetSessRec
+                BEQ     @95
+                MOVE.L  A0,A2
+
+                MOVE.L  A2,(IPCStartPB.saveA2,A3)
+
+                BSET    #0,(IPCSessRec.flags,A2)
+                BNE.S   @94
+
+                MOVE.L  (IPCSessRec.nbpEntity,A2),-(SP)
+                MOVE.L  (IPCStartPB.locationName,A3),A0
+                PEA     (EntityName.objStr,A0)
+                PEA     (EntityName.typeStr,A0)
+                PEA     (EntityName.zoneStr,A0)
+                JSR     NBPSetEntity
+
+                MOVE.L  (IPCSessRec.paramBlock0,A2),A0
+                LEA     Start0,A1
+                MOVE.L  A1,(MPPParamBlock.ioCompletion,A0)
+                MOVE    (mppRefNum,A4),(MPPParamBlock.ioRefNum,A0)
+                MOVE    #lookupName,(MPPParamBlock.csCode,A0)
+                MOVE.B  #8,(MPPParamBlock.interval,A0)
+                MOVE.B  #5,(MPPParamBlock.count,A0)
+                MOVE.L  (IPCSessRec.nbpEntity,A2),(MPPParamBlock.nbpPtrs,A0)
+                MOVE.L  (IPCSessRec.nbpBuffer,A2),(MPPParamBlock.retBuffPtr,A0)
+                MOVE    #NTElement.sizeof,(MPPParamBlock.retBuffSize,A0)
+                MOVE    #1,(MPPParamBlock.maxToGet,A0)
+                MOVE.L  A3,(MSCParamBlock.saveA3,A0)
+                _PBControlAsync
+                BNE.S   @2
+
+                TST.B   (asyncFlag,A6)
+                BNE.S   @2
+
+@1              MOVE    (IPCStartPB.ioResult,A3),D0
+                BGT.S   @1
+
+@2              MOVE    D0,(Result,A6)
+                BRA.S   Exit
+
+@94             MOVE    #kIPCBadReqErr,D7
+                BRA.S   @96
+
+@95             MOVE    #kIPCNoSessionErr,D7
+@96             BRA.S   @98
+
+@97             MOVE    #kIPCNotInitErr,D7
+
+@98             MOVE    D7,(IPCStartPB.ioResult,A3)
+                MOVE.L  (IPCStartPB.ioCompletion,A3),D0
+                BEQ.S   @99
+                MOVE.L  D0,A0
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+@99             MOVE    D7,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                RTD     #ParamSize
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; Routine name  Start0
+;
+; On entry      A0: paramBlock (pointer)
+;               D0: result code (word)
+;———————————————————————————————————————————————————————————————
+START0          PROC    ENTRY
+
+                IMPORT  START1
+
+                WITH    Globals
+
+                MOVEM.L D3-D7/A2-A5,-(SP)
+
+                MOVE.L  (IPCVars,PC),A4
+                MOVE.L  (MSCParamBlock.saveA3,A0),A3
+                MOVE.L  (IPCStartPB.saveA2,A3),A2
+
+                MOVE    D0,D7
+                BNE.S   @99
+
+                TST     (MPPParamBlock.numGotten,A0)
+                BEQ.S   @98
+
+                MOVE.L  (IPCSessRec.nbpBuffer,A2),A0
+                MOVE.L  (NTElement.nteAddress,A0),D6
+
+                MOVE.L  (IPCSessRec.paramBlock0,A2),A0
+                LEA     Start1,A1
+                MOVE.L  A1,(DSPParamBlock.ioCompletion,A0)
+                MOVE    (dspRefNum,A4),(DSPParamBlock.ioCRefNum,A0)
+                MOVE    #dspOpen,(DSPParamBlock.csCode,A0)
+                MOVE    (IPCSessRec.ccbRefNum,A2),(DSPParamBlock.ccbRefNum,A0)
+                MOVE.L  D6,(DSPParamBlock.remoteAddress,A0)
+                CLR.L   (DSPParamBlock.filterAddress,A0)
+                MOVE.B  #ocRequest,(DSPParamBlock.ocMode,A0)
+                MOVE.B  #0,(DSPParamBlock.ocInterval,A0)
+                MOVE.B  #5,(DSPParamBlock.ocMaximum,A0)
+                MOVE.L  A3,(MSCParamBlock.saveA3,A0)
+                _PBControlAsync
+                BRA.S   Exit
+
+@98             MOVE    #kIPCNotFoundErr,D7 
+
+@99             BCLR    #0,(IPCSessRec.flags,A2)
+
+                MOVE    D7,(IPCStartPB.ioResult,A3)
+                MOVE.L  (IPCStartPB.ioCompletion,A3),D0
+                BEQ.S   Exit
+                MOVE.L  D0,A0
+                MOVE.L  (IPCStartPB.saveA5,A3),A5
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A5
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; Routine name  Start1
+;
+; On entry      A0: paramBlock (pointer)
+;               D0: result code (word)
+;———————————————————————————————————————————————————————————————
+START1          PROC    ENTRY
+
+                MOVEM.L D3-D7/A2-A5,-(SP)
+
+                MOVE.L  (MSCParamBlock.saveA3,A0),A3
+                MOVE.L  (IPCStartPB.saveA2,A3),A2
+
+                MOVE    D0,D7
+
+                BCLR    #0,(IPCSessRec.flags,A2)
+
+                MOVE    D7,(IPCStartPB.ioResult,A3)
+                MOVE.L  (IPCStartPB.ioCompletion,A3),D0
+                BEQ.S   Exit
+                MOVE.L  D0,A0
+                MOVE.L  (IPCStartPB.saveA5,A3),A5
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A5
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; pascal OSErr IPCEnd(IPCParamBlockPtr pb, Boolean asyncFlag);
+;———————————————————————————————————————————————————————————————
+IPCEND          FUNC    EXPORT
+
+                IMPORT  END0
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+pb              DS.L    1
+asyncFlag       DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE.L  (pb,A6),A3
+                MOVE.L  A5,(IPCEndPB.saveA5,A3)
+                TST.B   (asyncFlag,A6)
+                BNE.S   @0
+                MOVE.L  #NIL,(IPCEndPB.ioCompletion,A3)
+@0              MOVE    #1,(IPCEndPB.ioResult,A3)
+
+                MOVE.L  (IPCVars,PC),D0
+                BEQ.S   @97
+                MOVE.L  D0,A4
+
+                MOVE    (IPCEndPB.sessRefNum,A3),D0
+                BSR     GetSessRec
+                BEQ.S   @95
+                MOVE.L  A0,A2
+
+                MOVE.L  A2,(IPCEndPB.saveA2,A3)
+
+                BSET    #1,(IPCSessRec.flags,A2)
+                BNE.S   @94
+
+                MOVE.L  (IPCSessRec.paramBlock1,A2),A0
+                LEA     End0,A1
+                MOVE.L  A1,(DSPParamBlock.ioCompletion,A0)
+                MOVE    (dspRefNum,A4),(DSPParamBlock.ioCRefNum,A0)
+                MOVE    #dspClose,(DSPParamBlock.csCode,A0)
+                MOVE    (IPCSessRec.ccbRefNum,A2),(DSPParamBlock.ccbRefNum,A0)
+                MOVE.B  (IPCEndPB.abort,A3),(DSPParamBlock.abort,A0)
+                MOVE.L  A3,(MSCParamBlock.saveA3,A0)
+                _PBControlAsync
+                BNE.S   @2
+
+                TST.B   (asyncFlag,A6)
+                BNE.S   @2
+
+@1              MOVE    (IPCEndPB.ioResult,A3),D0
+                BGT.S   @1
+
+@2              MOVE    D0,(Result,A6)
+                BRA.S   Exit
+
+@94             MOVE    #kIPCBadReqErr,D7
+                BRA.S   @96
+
+@95             MOVE    #kIPCNoSessionErr,D7
+@96             BRA.S   @98
+
+@97             MOVE    #kIPCNotInitErr,D7
+
+@98             MOVE    D7,(IPCEndPB.ioResult,A3)
+                MOVE.L  (IPCEndPB.ioCompletion,A3),D0
+                BEQ.S   @99
+                MOVE.L  D0,A0
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+@99             MOVE    D7,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                RTD     #ParamSize
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; Routine name  End0
+;
+; On entry      A0: paramBlock (pointer)
+;               D0: result code (word)
+;———————————————————————————————————————————————————————————————
+END0            PROC    ENTRY
+
+                MOVEM.L D3-D7/A2-A5,-(SP)
+
+                MOVE.L  (MSCParamBlock.saveA3,A0),A3
+                MOVE.L  (IPCEndPB.saveA2,A3),A2
+
+                MOVE    D0,D7
+
+                BCLR    #1,(IPCSessRec.flags,A2)
+
+                MOVE    D7,(IPCEndPB.ioResult,A3)
+                MOVE.L  (IPCEndPB.ioCompletion,A3),D0
+                BEQ.S   Exit
+                MOVE.L  D0,A0
+                MOVE.L  (IPCEndPB.saveA5,A3),A5
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A5
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; pascal OSErr IPCListen(IPCParamBlockPtr pb, Boolean asyncFlag);
+;———————————————————————————————————————————————————————————————
+IPCLISTEN       FUNC    EXPORT
+
+                IMPORT  LISTEN0
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+pb              DS.L    1
+asyncFlag       DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE.L  (pb,A6),A3
+                MOVE.L  A5,(IPCListenPB.saveA5,A3)
+                TST.B   (asyncFlag,A6)
+                BNE.S   @0
+                MOVE.L  #NIL,(IPCListenPB.ioCompletion,A3)
+@0              MOVE    #1,(IPCListenPB.ioResult,A3)
+
+                MOVE.L  (IPCVars,PC),D0
+                BEQ.S   @97
+                MOVE.L  D0,A4
+
+                MOVE    (IPCListenPB.sessRefNum,A3),D0
+                BSR     GetSessRec
+                BEQ.S   @95
+                MOVE.L  A0,A2
+
+                MOVE.L  A2,(IPCListenPB.saveA2,A3)
+
+                BSET    #0,(IPCSessRec.flags,A2)
+                BNE.S   @94
+
+                MOVE.L  (IPCSessRec.paramBlock0,A2),A0
+                LEA     Listen0,A1
+                MOVE.L  A1,(DSPParamBlock.ioCompletion,A0)
+                MOVE    (dspRefNum,A4),(DSPParamBlock.ioCRefNum,A0)
+                MOVE    #dspOpen,(DSPParamBlock.csCode,A0)
+                MOVE    (IPCSessRec.ccbRefNum,A2),(DSPParamBlock.ccbRefNum,A0)
+                CLR.L   (DSPParamBlock.filterAddress,A0)
+                MOVE.B  #ocPassive,(DSPParamBlock.ocMode,A0)
+                MOVE.B  #0,(DSPParamBlock.ocInterval,A0)
+                MOVE.B  #5,(DSPParamBlock.ocMaximum,A0)
+                MOVE.L  A3,(MSCParamBlock.saveA3,A0)
+                _PBControlAsync
+                BNE.S   @2
+
+                TST.B   (asyncFlag,A6)
+                BNE.S   @2
+
+@1              MOVE    (IPCListenPB.ioResult,A3),D0
+                BGT.S   @1
+
+@2              MOVE    D0,(Result,A6)
+                BRA.S   Exit
+
+@94             MOVE    #kIPCBadReqErr,D7
+                BRA.S   @96
+
+@95             MOVE    #kIPCNoSessionErr,D7
+@96             BRA.S   @98
+
+@97             MOVE    #kIPCNotInitErr,D7
+
+@98             MOVE    D7,(IPCListenPB.ioResult,A3)
+                MOVE.L  (IPCListenPB.ioCompletion,A3),D0
+                BEQ.S   @99
+                MOVE.L  D0,A0
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+@99             MOVE    D7,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                RTD     #ParamSize
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; Routine name  Listen0
+;
+; On entry      A0: paramBlock (pointer)
+;               D0: result code (word)
+;———————————————————————————————————————————————————————————————
+LISTEN0         PROC    ENTRY
+
+                MOVEM.L D3-D7/A2-A5,-(SP)
+
+                MOVE.L  (MSCParamBlock.saveA3,A0),A3
+                MOVE.L  (IPCListenPB.saveA2,A3),A2
+
+                MOVE    D0,D7
+
+                BCLR    #0,(IPCSessRec.flags,A2)
+
+                MOVE    D7,(IPCListenPB.ioResult,A3)
+                MOVE.L  (IPCListenPB.ioCompletion,A3),D0
+                BEQ.S   Exit
+                MOVE.L  D0,A0
+                MOVE.L  (IPCListenPB.saveA5,A3),A5
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A5
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; pascal OSErr IPCRead(IPCParamBlockPtr pb, Boolean asyncFlag);
+;———————————————————————————————————————————————————————————————
+IPCREAD         FUNC    EXPORT
+
+                IMPORT  READ0
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+pb              DS.L    1
+asyncFlag       DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE.L  (pb,A6),A3
+                MOVE.L  A5,(IPCReadPB.saveA5,A3)
+                TST.B   (asyncFlag,A6)
+                BNE.S   @0
+                MOVE.L  #NIL,(IPCReadPB.ioCompletion,A3)
+@0              MOVE    #1,(IPCReadPB.ioResult,A3)
+
+                MOVE.L  (IPCVars,PC),D0
+                BEQ.S   @97
+                MOVE.L  D0,A4
+
+                MOVE    (IPCReadPB.sessRefNum,A3),D0
+                BSR     GetSessRec
+                BEQ.S   @95
+                MOVE.L  A0,A2
+
+                MOVE.L  A2,(IPCReadPB.saveA2,A3)
+
+                BSET    #2,(IPCSessRec.flags,A2)
+                BNE.S   @94
+
+                MOVE.L  (IPCSessRec.paramBlock2,A2),A0
+                LEA     Read0,A1
+                MOVE.L  A1,(DSPParamBlock.ioCompletion,A0)
+                MOVE    (dspRefNum,A4),(DSPParamBlock.ioCRefNum,A0)
+                MOVE    #dspRead,(DSPParamBlock.csCode,A0)
+                MOVE    (IPCSessRec.ccbRefNum,A2),(DSPParamBlock.ccbRefNum,A0)
+                MOVE    (IPCReadPB.bufferLength,A3),(DSPParamBlock.reqCount,A0)
+                MOVE.L  (IPCReadPB.bufferPtr,A3),(DSPParamBlock.dataPtr,A0)
+                MOVE.L  A3,(MSCParamBlock.saveA3,A0)
+                _PBControlAsync
+                BNE.S   @2
+
+                TST.B   (asyncFlag,A6)
+                BNE.S   @2
+
+@1              MOVE    (IPCReadPB.ioResult,A3),D0
+                BGT.S   @1
+
+@2              MOVE    D0,(Result,A6)
+                BRA.S   Exit
+
+@94             MOVE    #kIPCBadReqErr,D7
+                BRA.S   @96
+
+@95             MOVE    #kIPCNoSessionErr,D7
+@96             BRA.S   @98
+
+@97             MOVE    #kIPCNotInitErr,D7
+
+@98             MOVE    D7,(IPCReadPB.ioResult,A3)
+                MOVE.L  (IPCReadPB.ioCompletion,A3),D0
+                BEQ.S   @99
+                MOVE.L  D0,A0
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+@99             MOVE    D7,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                RTD     #ParamSize
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; Routine name  Read0
+;
+; On entry      A0: paramBlock (pointer)
+;               D0: result code (word)
+;———————————————————————————————————————————————————————————————
+READ0           PROC    ENTRY
+
+                MOVEM.L D3-D7/A2-A5,-(SP)
+
+                MOVE.L  (MSCParamBlock.saveA3,A0),A3
+                MOVE.L  (IPCReadPB.saveA2,A3),A2
+
+                MOVE    D0,D7
+                BNE.S   @99
+
+                MOVE    (DSPParamBlock.actCount,A0),D0
+                MOVE.B  (DSPParamBlock.eom,A0),D1
+
+                TST     D0
+                BNE.S   @0
+                TST.B   D1
+                BEQ.S   @98
+
+@0              TST.B   D1
+                SEQ     D1
+                NEG.B   D1
+
+                MOVE    D0,(IPCReadPB.actualLength,A3)
+                MOVE.B  D1,(IPCReadPB.more,A3)
+                BRA.S   @99
+
+@98             MOVE    #errState,D7
+
+@99             BCLR    #2,(IPCSessRec.flags,A2)
+
+                MOVE    D7,(IPCReadPB.ioResult,A3)
+                MOVE.L  (IPCReadPB.ioCompletion,A3),D0
+                BEQ.S   Exit
+                MOVE.L  D0,A0
+                MOVE.L  (IPCReadPB.saveA5,A3),A5
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A5
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; pascal OSErr IPCWrite(IPCParamBlockPtr pb, Boolean asyncFlag);
+;———————————————————————————————————————————————————————————————
+IPCWRITE        FUNC    EXPORT
+
+                IMPORT  WRITE0
+
+StackFrame      RECORD  {A6Link},DECR
+Result          DS.W    1
+ParamBegin      EQU     *
+pb              DS.L    1
+asyncFlag       DS.W    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    Globals,StackFrame
+
+                LINK    A6,#LocalSize
+                MOVEM.L D3-D7/A2-A4,-(SP)
+
+                MOVE.L  (pb,A6),A3
+                MOVE.L  A5,(IPCWritePB.saveA5,A3)
+                TST.B   (asyncFlag,A6)
+                BNE.S   @0
+                MOVE.L  #NIL,(IPCWritePB.ioCompletion,A3)
+@0              MOVE    #1,(IPCWritePB.ioResult,A3)
+
+                MOVE.L  (IPCVars,PC),D0
+                BEQ.S   @97
+                MOVE.L  D0,A4
+
+                MOVE    (IPCWritePB.sessRefNum,A3),D0
+                BSR     GetSessRec
+                BEQ.S   @95
+                MOVE.L  A0,A2
+
+                MOVE.L  A2,(IPCWritePB.saveA2,A3)
+
+                BSET    #3,(IPCSessRec.flags,A2)
+                BNE.S   @94
+
+                MOVE.L  (IPCSessRec.paramBlock3,A2),A0
+                LEA     Write0,A1
+                MOVE.L  A1,(DSPParamBlock.ioCompletion,A0)
+                MOVE    (dspRefNum,A4),(DSPParamBlock.ioCRefNum,A0)
+                MOVE    #dspWrite,(DSPParamBlock.csCode,A0)
+                MOVE    (IPCSessRec.ccbRefNum,A2),(DSPParamBlock.ccbRefNum,A0)
+                MOVE    (IPCWritePB.bufferLength,A3),(DSPParamBlock.reqCount,A0)
+                MOVE.L  (IPCWritePB.bufferPtr,A3),(DSPParamBlock.dataPtr,A0)
+                TST.B   (IPCWritePB.more,A3)
+                SEQ     D0
+                NEG.B   D0
+                MOVE.B  D0,(DSPParamBlock.eom,A0)
+                MOVE.B  D0,(DSPParamBlock.flush,A0)
+                MOVE.L  A3,(MSCParamBlock.saveA3,A0)
+                _PBControlAsync
+                BNE.S   @2
+
+                TST.B   (asyncFlag,A6)
+                BNE.S   @2
+
+@1              MOVE    (IPCWritePB.ioResult,A3),D0
+                BGT.S   @1
+
+@2              MOVE    D0,(Result,A6)
+                BRA.S   Exit
+
+@94             MOVE    #kIPCBadReqErr,D7
+                BRA.S   @96
+
+@95             MOVE    #kIPCNoSessionErr,D7
+@96             BRA.S   @98
+
+@97             MOVE    #kIPCNotInitErr,D7
+
+@98             MOVE    D7,(IPCWritePB.ioResult,A3)
+                MOVE.L  (IPCWritePB.ioCompletion,A3),D0
+                BEQ.S   @99
+                MOVE.L  D0,A0
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+@99             MOVE    D7,(Result,A6)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A4
+                UNLK    A6
+                RTD     #ParamSize
+
+                ENDF
+;———————————————————————————————————————————————————————————————
+; Routine name  Write0
+;
+; On entry      A0: paramBlock (pointer)
+;               D0: result code (word)
+;———————————————————————————————————————————————————————————————
+WRITE0          PROC    ENTRY
+
+                MOVEM.L D3-D7/A2-A5,-(SP)
+
+                MOVE.L  (MSCParamBlock.saveA3,A0),A3
+                MOVE.L  (IPCWritePB.saveA2,A3),A2
+
+                MOVE    D0,D7
+                BNE.S   @99
+
+                MOVE    (DSPParamBlock.actCount,A0),(IPCWritePB.actualLength,A3)
+
+@99             BCLR    #3,(IPCSessRec.flags,A2)
+
+                MOVE    D7,(IPCWritePB.ioResult,A3)
+                MOVE.L  (IPCWritePB.ioCompletion,A3),D0
+                BEQ.S   Exit
+                MOVE.L  D0,A0
+                MOVE.L  (IPCWritePB.saveA5,A3),A5
+                MOVE.L  A3,-(SP)
+                JSR     (A0)
+
+Exit            MOVEM.L (SP)+,D3-D7/A2-A5
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+                END

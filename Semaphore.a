@@ -1,0 +1,284 @@
+; File Semaphore.a
+;———————————————————————————————————————————————————————————————
+;
+; Semaphore Manager v1.0d14
+;
+;       Yves Lempereur
+;
+; MODIFICATION HISTORY:
+;       03/28/95  YL    Project begins
+;
+;———————————————————————————————————————————————————————————————
+                CASE    OBJ
+;———————————————————————————————————————————————————————————————
+                PRINT   PUSH,OFF
+
+                INCLUDE 'OSUtils.a'
+
+                PRINT   POP
+;———————————————————————————————————————————————————————————————
+IntMask         EQU     $0700
+;———————————————————————————————————————————————————————————————
+inSMQ           EQU     7
+;———————————————————————————————————————————————————————————————
+SMTask          RECORD  0               ; Semaphore Task Record
+smLink          DS.L    1
+smAddr          DS.L    1
+sizeof          EQU     *
+                ENDR
+;———————————————————————————————————————————————————————————————
+                SEG     'Main'
+;———————————————————————————————————————————————————————————————
+                MACHINE MC68020
+;———————————————————————————————————————————————————————————————
+; Routine name  InitQueue
+;
+; On entry      A1: theQueue (pointer)
+;———————————————————————————————————————————————————————————————
+INITQUEUE       PROC    ENTRY
+
+                WITH    QHdr
+
+                CLR     (qFlags,A1)
+                CLR.L   (qHead,A1)
+                CLR.L   (qTail,A1)
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; Routine name  Enqueue
+;
+; On entry      A0: qEntry (pointer)
+;               A1: theQueue (pointer)
+;———————————————————————————————————————————————————————————————
+ENQUEUE         PROC    ENTRY
+
+                WITH    QHdr,QElem
+
+                MOVE.L  A2,-(SP)
+                CLR.L   (qLink,A0)
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+                MOVE.L  (qTail,A1),A2
+                TST.L   A2
+                BNE.S   @0
+                MOVE.L  A0,(qHead,A1)
+                BRA.S   @1
+@0              MOVE.L  A0,(qLink,A2)
+@1              MOVE.L  A0,(qTail,A1)
+                MOVE    (SP)+,SR
+                MOVE.L  (SP)+,A2
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; Routine name  Dequeue
+;
+; On entry      A0: qEntry (pointer)
+;               A1: theQueue (pointer)
+;———————————————————————————————————————————————————————————————
+DEQUEUE         PROC    ENTRY
+
+                WITH    QHdr,QElem
+
+                MOVEM.L A2/A3,-(SP)
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+                SUB.L   A2,A2
+                MOVE.L  (qHead,A1),A3
+@0              TST.L   A3
+                BEQ.S   @4
+                CMP.L   A3,A0
+                BEQ.S   @1
+                MOVE.L  A3,A2
+                MOVE.L  (qLink,A2),A3
+                BRA.S   @0
+@1              MOVE.L  (qLink,A3),A3
+                TST.L   A2
+                BNE.S   @2
+                MOVE.L  A3,(qHead,A1)
+                BRA.S   @3
+@2              MOVE.L  A3,(qLink,A2)
+@3              TST.L   A3
+                BNE.S   @4
+                MOVE.L  A2,(qTail,A1)
+@4              MOVE    (SP)+,SR
+                MOVEM.L (SP)+,A2/A3
+                RTS
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; pascal void SMInit(QHdrPtr sem);
+;———————————————————————————————————————————————————————————————
+SMINIT          PROC    EXPORT
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+sem             DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame
+
+                LINK    A6,#LocalSize
+
+                MOVE.L  (sem,A6),A1
+                BSR     InitQueue
+
+Exit            UNLK    A6
+                RTD     #ParamSize
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; pascal void SMInstall(SMTaskPtr task, QHdrPtr sem);
+;———————————————————————————————————————————————————————————————
+SMINSTALL       PROC    EXPORT
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+task            DS.L    1
+sem             DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame,QHdr,SMTask
+
+                LINK    A6,#LocalSize
+
+                MOVE.L  (sem,A6),A1
+                MOVE.L  (task,A6),A0
+
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+
+                BSET    #inSMQ,(qFlags,A1)
+                BEQ.S   @0
+
+                BSR     Enqueue
+
+                BRA.S   @2
+
+@0              MOVE    (SP)+,SR
+
+                MOVE.L  (smAddr,A0),A1
+                MOVE.L  A0,-(SP)
+                JSR     (A1)
+
+                MOVE.L  (sem,A6),A1
+
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+
+                MOVE.L  (qHead,A1),A0
+                TST.L   A0
+                BEQ.S   @1
+
+                BSR     Dequeue
+
+                BRA.S   @0
+
+@1              BCLR    #inSMQ,(qFlags,A1)
+
+@2              MOVE    (SP)+,SR
+
+Exit            UNLK    A6
+                RTD     #ParamSize
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; pascal void SMLock(SMTaskPtr task, QHdrPtr sem);
+;———————————————————————————————————————————————————————————————
+SMLOCK          PROC    EXPORT
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+task            DS.L    1
+sem             DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame,QHdr,SMTask
+
+                LINK    A6,#LocalSize
+
+                MOVE.L  (sem,A6),A1
+                MOVE.L  (task,A6),A0
+
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+
+                BSET    #inSMQ,(qFlags,A1)
+                BNE.S   @0
+
+                MOVE    (SP)+,SR
+
+                MOVE.L  (smAddr,A0),A1
+                MOVE.L  A0,-(SP)
+                JSR     (A1)
+
+                BRA.S   Exit
+
+@0              BSR     Enqueue
+
+                MOVE    (SP)+,SR
+
+Exit            UNLK    A6
+                RTD     #ParamSize
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+; pascal void SMUnlock(QHdrPtr sem);
+;———————————————————————————————————————————————————————————————
+SMUNLOCK        PROC    EXPORT
+
+StackFrame      RECORD  {A6Link},DECR
+ParamBegin      EQU     *
+sem             DS.L    1
+ParamSize       EQU     ParamBegin-*
+RetAddr         DS.L    1
+A6Link          DS.L    1
+LocalSize       EQU     *
+                ENDR
+
+                WITH    StackFrame,QHdr,SMTask
+
+                LINK    A6,#LocalSize
+
+                MOVE.L  (sem,A6),A1
+
+                MOVE    SR,-(SP)
+                OR      #IntMask,SR
+
+                MOVE.L  (qHead,A1),A0
+                TST.L   A0
+                BNE.S   @0
+
+                BCLR    #inSMQ,(qFlags,A1)
+
+                MOVE    (SP)+,SR
+
+                BRA.S   Exit
+
+@0              BSR     Dequeue
+
+                MOVE    (SP)+,SR
+
+                MOVE.L  (smAddr,A0),A1
+                MOVE.L  A0,-(SP)
+                JSR     (A1)
+
+Exit            UNLK    A6
+                RTD     #ParamSize
+
+                ENDP
+;———————————————————————————————————————————————————————————————
+                END

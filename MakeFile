@@ -1,0 +1,213 @@
+#	File:		MakeFile
+#	Targets:	Server Client
+#	Sources:	Server.r
+#				Client.r
+#				Help.r
+#				IPC.a
+#				IPCBrowser.a
+#				Semaphore.a
+#				Misc.a
+#				Misc.c
+#				SCom.c
+#				CCom.c
+#				Prefs.c
+#				Logon.c
+#				ChangePass.c
+#				Preferences.c
+#				Macros.c
+#				NewMacro.c
+#				ChangeText.c
+#				ChangeName.c
+#				Invite.c
+#				InviteMore.c
+#				Members.c
+#				Join.c
+#				Notify.c
+#				Disconnect.c
+#				Denied.c
+#				Error.c
+#				SSplash.c
+#				Splash.c
+#				Tracker.c
+#				SConf.c
+#				Conf.c
+#				Graphic.c
+#				Server.c
+#				Client.c
+#	Created:	Wednesday, March 31, 1993 9:03:19 AM
+
+MakeFile	= MakeFile
+
+AOptions	= -wb
+COptions	= -opt all -mc68020 -mbg off
+
+SObjects	= ∂
+		IPC.a.o ∂
+		Semaphore.a.o ∂
+		Misc.a.o ∂
+		Misc.c.o ∂
+		SCom.c.o ∂
+		SSplash.c.o ∂
+		SConf.c.o ∂
+		Server.c.o
+
+CObjects	= ∂
+		IPC.a.o ∂
+		IPCBrowser.a.o ∂
+		Misc.a.o ∂
+		SmartScrollAPI.c.o ∂
+		Misc.c.o ∂
+		CCom.c.o ∂
+		Prefs.c.o ∂
+		Logon.c.o ∂
+		ChangePass.c.o ∂
+		Preferences.c.o ∂
+		Macros.c.o ∂
+		NewMacro.c.o ∂
+		ChangeText.c.o ∂
+		ChangeName.c.o ∂
+		Invite.c.o ∂
+		InviteMore.c.o ∂
+		Members.c.o ∂
+		Join.c.o ∂
+		Notify.c.o ∂
+		Disconnect.c.o ∂
+		Denied.c.o ∂
+		Error.c.o ∂
+		Splash.c.o ∂
+		Tracker.c.o ∂
+		Conf.c.o ∂
+		Graphic.c.o ∂
+		Client.c.o
+
+Server ƒƒ {MakeFile} {SObjects}
+	ILink -rn ∂
+		{SObjects} ∂
+		#"{Libraries}MathLib.o" ∂
+		#"{CLibraries}Complex.o" ∂
+		"{CLibraries}StdCLib.o" ∂
+		"{Libraries}MacRuntime.o" ∂
+		"{Libraries}IntEnv.o" ∂
+		#"{Libraries}ToolLibs.o" ∂
+		"{Libraries}Interface.o" ∂
+		-o {Targ}
+
+Client ƒƒ {MakeFile} {CObjects}
+	ILink -rn ∂
+		{CObjects} ∂
+		#"{Libraries}MathLib.o" ∂
+		#"{CLibraries}Complex.o" ∂
+		"{CLibraries}StdCLib.o" ∂
+		"{Libraries}MacRuntime.o" ∂
+		"{Libraries}IntEnv.o" ∂
+		#"{Libraries}ToolLibs.o" ∂
+		"{Libraries}Interface.o" ∂
+		-o {Targ}
+
+Server ƒƒ {MakeFile} Server.r Server.rsrc
+	Rez Server.r -append -o {Targ}
+	SetFile -t 'APPL' -c 'TMP3' -a Bi {Targ}
+
+Client ƒƒ {MakeFile} Client.r Client.rsrc
+	Rez Client.r -append -o {Targ}
+	SetFile -t 'APPL' -c 'TMP2' -a Bi {Targ}
+
+Client ƒƒ {MakeFile} Help.r
+	Rez Help.r -a -o {Targ}
+
+IPC.a.o ƒ {MakeFile} IPC.a
+	{Asm} {AOptions} IPC.a
+
+IPCBrowser.a.o ƒ {MakeFile} IPCBrowser.a
+	{Asm} {AOptions} IPCBrowser.a
+
+Semaphore.a.o ƒ {MakeFile} Semaphore.a
+	{Asm} {AOptions} Semaphore.a
+
+Misc.a.o ƒ {MakeFile} Misc.a
+	{Asm} {AOptions} Misc.a
+
+SmartScrollAPI.c.o ƒ {MakeFile} SmartScrollAPI.h SmartScrollAPI.c
+	{C} {COptions} SmartScrollAPI.c
+
+Misc.c.o ƒ {MakeFile} Misc.c
+	{C} {COptions} Misc.c
+
+SCom.c.o ƒ {MakeFile} IPC.h Protocol.h Semaphore.h Misc.h Server.h SCom.c
+	{C} {COptions} SCom.c
+
+CCom.c.o ƒ {MakeFile} IPC.h Protocol.h Misc.h Client.h CCom.c
+	{C} {COptions} CCom.c
+
+Prefs.c.o ƒ {MakeFile} Misc.h Prefs.c
+	{C} {COptions} Prefs.c
+
+Logon.c.o ƒ {MakeFile} Misc.h Logon.c
+	{C} {COptions} Logon.c
+
+ChangePass.c.o ƒ {MakeFile} Misc.h ChangePass.c
+	{C} {COptions} ChangePass.c
+
+Preferences.c.o ƒ {MakeFile} Misc.h Preferences.c
+	{C} {COptions} Preferences.c
+
+Macros.c.o ƒ {MakeFile} Misc.h Macros.c
+	{C} {COptions} Macros.c
+
+NewMacro.c.o ƒ {MakeFile} Misc.h NewMacro.c
+	{C} {COptions} NewMacro.c
+
+ChangeText.c.o ƒ {MakeFile} Misc.h ChangeText.c
+	{C} {COptions} ChangeText.c
+
+ChangeName.c.o ƒ {MakeFile} Misc.h ChangeName.c
+	{C} {COptions} ChangeName.c
+
+Invite.c.o ƒ {MakeFile} Misc.h Invite.c
+	{C} {COptions} Invite.c
+
+InviteMore.c.o ƒ {MakeFile} Misc.h InviteMore.c
+	{C} {COptions} InviteMore.c
+
+Members.c.o ƒ {MakeFile} Misc.h Members.c
+	{C} {COptions} Members.c
+
+Join.c.o ƒ {MakeFile} Misc.h Join.c
+	{C} {COptions} Join.c
+
+Notify.c.o ƒ {MakeFile} Misc.h Notify.c
+	{C} {COptions} Notify.c
+
+Disconnect.c.o ƒ {MakeFile} Misc.h Disconnect.c
+	{C} {COptions} Disconnect.c
+
+Denied.c.o ƒ {MakeFile} Misc.h Denied.c
+	{C} {COptions} Denied.c
+
+Error.c.o ƒ {MakeFile} Misc.h Error.c
+	{C} {COptions} Error.c
+
+SSplash.c.o ƒ {MakeFile} Misc.h Server.h SSplash.c
+	{C} {COptions} SSplash.c
+
+Splash.c.o ƒ {MakeFile} Misc.h Client.h Splash.c
+	{C} {COptions} Splash.c
+
+Tracker.c.o ƒ {MakeFile} Misc.h Client.h Tracker.c
+	{C} {COptions} Tracker.c
+
+SConf.c.o ƒ {MakeFile} Misc.h Server.h SConf.c
+	{C} {COptions} SConf.c
+
+Conf.c.o ƒ {MakeFile} SmartScrollAPI.h Misc.h Client.h Conf.c
+	{C} {COptions} Conf.c
+
+Graphic.c.o ƒ {MakeFile} Misc.h Client.h Graphic.c
+	{C} {COptions} Graphic.c
+
+Server.c.o ƒ {MakeFile} IPC.h Misc.h Server.h Server.c
+	{C} {COptions} Server.c
+
+Client.c.o ƒ {MakeFile} SmartScrollAPI.h IPC.h Protocol.h Misc.h Client.h Client.c
+	{C} {COptions} Client.c
+
